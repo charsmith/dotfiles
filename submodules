@@ -1,0 +1,16 @@
+http://github.com/tpope/vim-fugitive.git _vim/bundle/fugitive
+http://github.com/msanders/snipmate.vim.git _vim/bundle/snipmate
+http://github.com/tpope/vim-surround.git _vim/bundle/surround
+http://github.com/tpope/vim-git.git _vim/bundle/git
+http://github.com/ervandew/supertab.git _vim/bundle/supertab
+http://github.com/wincent/Command-T.git _vim/bundle/command-t
+http://github.com/mitechie/pyflakes-pathogen.git _vim/bundle/pyflakes-pathogen
+http://github.com/mileszs/ack.vim.git _vim/bundle/ack
+http://github.com/sjl/gundo.vim.git _vim/bundle/gundo
+http://github.com/fs111/pydoc.vim.git _vim/bundle/pydoc
+http://github.com/vim-scripts/pep8.git _vim/bundle/pep8
+http://github.com/alfredodeza/pytest.vim.git _vim/bundle/py.test
+http://github.com/vim-scripts/The-NERD-tree.git _vim/bundle/nerdtree
+http://github.com/sontek/rope-vim.git _vim/bundle/ropevim
+http://github.com/mitechie/pyflakes-pathogen.git _vim/bundle/pyflakes
+http://github.com/Lokaltog/vim-powerline _vim/bundle/powerline

@@ -1,0 +1,6 @@
+alias ls='ls -Gp'
+alias ll='ls -lh'
+alias la='ls -A'
+alias lal='ls -Alh'
+alias l='ls -CF'
+alias vi='vim'

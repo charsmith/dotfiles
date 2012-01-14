@@ -1,0 +1,147 @@
+"Charles' somewhat weird vimrc
+
+" Pathogen setup
+
+filetype off 
+call pathogen#helptags()
+call pathogen#runtime_append_all_bundles()
+
+
+set term=xterm
+
+"don't emulate vi
+set nocompatible
+
+"show the file editign stuff in the console title
+set title
+
+let mapleader=","
+
+"tabs
+"map <leader>n :tabnew<CR> 
+
+"swap files all in the same place
+"set dir=~/temp
+set nobackup
+set noswapfile
+
+"omni-completion
+filetype on
+filetype plugin on
+filetype plugin indent on
+filetype indent on
+set ofu=syntaxcomplete#Complete
+
+"move on splits 
+map <C-h> <C-w>h
+map <C-j> <C-w>j
+map <C-k> <C-w>k
+map <C-l> <C-w>l
+
+"behaviors 
+set splitright 												" put split window on the right
+"set autochdir
+set hlsearch
+set incsearch
+set autoread
+set ruler
+
+"make searches case insensitive unless they have capitals in them
+set ignorecase
+set smartcase
+
+"Treat Y as C and D work
+map Y y$
+
+"nnoremap <Esc> :noh<CR><Esc>
+
+"short messages
+set shortmess=atI
+
+"See whitespace
+set listchars=tab:>-,trail:·,eol:$,nbsp:.
+nmap <silent> <leader>w :set nolist!<CR>
+
+"sudo I forget you
+cmap w!! %!sudo tee > /dev/null %
+
+"edit vimrc and reload it
+map <leader>e :e! ~/.vimrc<cr>
+map <leader>s :source ~/.vimrc<cr>
+
+map <leader>c :let @/ = ""<cr>
+"remap tab keys to buffer to remain consistent
+"map gt :bn<cr>
+"map gT :bp<cr>
+
+set hidden
+
+"reformat lines
+map <leader>v 0ma}b:'a,.j<CR>0100 ? <CR>i<CR><Esc>
+
+"autoload vimrc
+autocmd! bufwritepost vimrc source ~/.vimrc
+
+"clear autocommands?
+
+"show syntax highlighting
+syntax on
+
+"tabs
+set shiftwidth=4
+set autoindent
+set shiftround
+set smartindent
+set tabstop=4
+set et
+
+set pastetoggle=<F12>
+
+set wildignore=*.swp,*.bak,*.pyc,*.class,*.tmp
+
+"lines can only be so long for now
+"set textwidth=119
+
+"don't beep at me ever
+set noerrorbells
+set visualbell
+set t_vb=
+
+"keep two rows when scrolling
+set scrolloff=2
+
+set t_Co=256
+colorscheme charles
+set number
+
+if has('gui_running')
+    "columns    width of the display
+    set background=dark
+endif
+
+"spelling
+"map <C-w> <Esc>:setlocal spell spelllang=en_us<CR>
+"map <C-z> <Esc>:setlocal nospell<CR>
+
+"perl
+autocmd Filetype perl set makeprg=$VIMRUNTIME/tools/efm_perl.pl\ -c\ %\ $*
+autocmd Filetype perl set errorformat=%f:%l:%m
+"filetype on
+"doesn't seem to read tex file properly
+autocmd BufNewFile,BufRead *.tex set filetype=tex
+
+
+"Plugins
+
+"Pep8
+let g:pyflakes_use_quickfix = 0
+let g:pep8_map='<leader>8'
+
+"NerdTree
+map <leader>n :NERDTreeToggle<CR>
+
+"Gundo
+map <leader>g :GundoToggle<CR>
+
+"match it
+ru macros/matchit.vim

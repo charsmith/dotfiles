@@ -1,0 +1,48 @@
+# If not running interactively, don't do anything
+[ -z "$PS1" ] && return
+
+#global options for all machines
+export HISTCONTROL=ignoredups
+export HISTCONTROL=ignoreboth
+export GDK_NATIVE_WINDOWS=1
+
+shopt -s checkwinsize
+
+set -o vi
+
+export PATH=${HOME}/bin:${PATH}
+export MANPAGER='less -Xq'
+export PAGER='less -Xq'
+
+# make less more friendly for non-text input files, see lesspipe(1)
+[ -x /usr/bin/lesspipe ] && eval "$(lesspipe)"
+
+if [ -f ~/.bash_functions ]; then
+    . ~/.bash_functions
+fi
+
+IN_VIM='$(in_vim)'
+GIT_BRANCH='$(git_branch)'
+PS1="$IN_VIM\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[01;32m\]$GIT_BRANCH\[\033[00m\]\$ "
+#change the terminal title as well
+PS1="\[\e]0;$IN_VIM\u@\h: \w$GIT_BRANCH\a\]$PS1"
+
+if [ -f ~/.bash_aliases ]; then
+    . ~/.bash_aliases
+fi
+
+#bashcompletion
+if [ -f /usr/local/etc/bash_completion ]; then
+    . /usr/local/etc/bash_completion
+fi
+
+if [ -f /etc/bash_completion ]; then
+    . /etc/bash_completion
+fi
+
+if [ -d ~/.locals ]; then
+	for file in ~/.locals/*
+    do
+        . $file
+    done
+fi

@@ -1,0 +1,5 @@
+# none, visible, or audible
+set bell-style none
+
+set editing-mode vi
+
