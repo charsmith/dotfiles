@@ -1,12 +1,11 @@
 # If not running interactively, don't do anything
 [ -z "$PS1" ] && return
 
-#global options for all machines
-export HISTCONTROL=ignoredups
 export HISTCONTROL=ignoreboth
 export GDK_NATIVE_WINDOWS=1
 
 shopt -s checkwinsize
+shopt -s cdspell #trying this one out
 
 set -o vi
 
@@ -16,6 +15,7 @@ export PAGER='less -Xq'
 
 # make less more friendly for non-text input files, see lesspipe(1)
 [ -x /usr/bin/lesspipe ] && eval "$(lesspipe)"
+[ -x /usr/local/bin/lesspipe.sh ] && eval "$(/usr/local/bin/lesspipe.sh)"
 
 if [ -f ~/.bash_functions ]; then
     . ~/.bash_functions

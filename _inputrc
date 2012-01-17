@@ -3,3 +3,11 @@ set bell-style none
 
 set editing-mode vi
 
+#show completions unless there are more than 100
+set page-completions off
+set show-all-if-ambiguous on
+set completion-query-items 100
+
+set input-meta on
+set output-meta on
+set convert-meta off
