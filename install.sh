@@ -30,11 +30,6 @@ source="${PWD}/_vim/_vimrc"
 target="${1}/.vimrc"
 link_file $source $target 
 
-cat submodules | perl -e 'while(<>){($a,$b) = split(/\s+/, $_); print `git submodule add $a $b`;}'
+rm -rf _vim/bundle/*
 
-git reset
-
-# setup command-t
-cd _vim/bundle/command-t
-rake make
-
+cat submodules | perl -e 'while(<>){($a,$b) = split(/\s+/, $_); print `git clone $a $b`;}'

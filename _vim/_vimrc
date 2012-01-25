@@ -2,12 +2,9 @@
 
 " Pathogen setup
 
-filetype off 
-call pathogen#helptags()
 call pathogen#runtime_append_all_bundles()
+call pathogen#helptags()
 
-
-set term=xterm
 
 "don't emulate vi
 set nocompatible
@@ -32,6 +29,9 @@ filetype plugin indent on
 filetype indent on
 set ofu=syntaxcomplete#Complete
 
+"always show the status bar
+set laststatus=2
+
 "move on splits 
 map <C-h> <C-w>h
 map <C-j> <C-w>j
@@ -39,7 +39,7 @@ map <C-k> <C-w>k
 map <C-l> <C-w>l
 
 "behaviors 
-set splitright 												" put split window on the right
+set splitright 			" put split window on the right
 "set autochdir
 set hlsearch
 set incsearch
@@ -59,7 +59,7 @@ map Y y$
 set shortmess=atI
 
 "See whitespace
-set listchars=tab:>-,trail:·,eol:$,nbsp:.
+set listchars=tab:>-,trail:.,eol:$,nbsp:.
 nmap <silent> <leader>w :set nolist!<CR>
 
 "sudo I forget you
@@ -81,8 +81,6 @@ map <leader>v 0ma}b:'a,.j<CR>0100 ? <CR>i<CR><Esc>
 
 "autoload vimrc
 autocmd! bufwritepost vimrc source ~/.vimrc
-
-"clear autocommands?
 
 "show syntax highlighting
 syntax on
@@ -132,6 +130,13 @@ autocmd BufNewFile,BufRead *.tex set filetype=tex
 
 
 "Plugins
+
+"ctrlp
+map <leader>t :CtrlP<CR>
+
+"buffergator
+let g:buffergator_suppress_keymaps = 1
+map <leader>b :BuffergatorToggle<CR>
 
 "Pep8
 let g:pyflakes_use_quickfix = 0
