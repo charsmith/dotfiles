@@ -128,6 +128,7 @@ autocmd Filetype perl set errorformat=%f:%l:%m
 "doesn't seem to read tex file properly
 autocmd BufNewFile,BufRead *.tex set filetype=tex
 
+set wildignore+=*/.git/*,*/.hg/*,*/.svn/*,*.gz,*.zip,*.o,*.pyc,*.class,*/target/*,*/dist/*,*/build/*
 
 "Plugins
 

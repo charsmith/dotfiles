@@ -15,3 +15,4 @@ http://github.com/tpope/vim-surround.git _vim/bundle/surround
 http://github.com/vim-scripts/The-NERD-tree.git _vim/bundle/nerdtree
 http://github.com/vim-scripts/pep8.git _vim/bundle/pep8
 http://github.com/jeetsukumaran/vim-buffergator.git _vim/bundle/buffergator
+http://github.com/kien/ctrlp.vim.git _vim/bundle/ctrlp
