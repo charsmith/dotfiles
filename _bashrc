@@ -9,9 +9,10 @@ shopt -s cdspell #trying this one out
 
 set -o vi
 
-export PATH=${HOME}/bin:${PATH}
+export PATH=${HOME}/bin:${PATH}:/usr/local/sbin
 export MANPAGER='less -Xq'
 export PAGER='less -Xq'
+export PYTHONSTARTUP=~/.pystartup
 
 # make less more friendly for non-text input files, see lesspipe(1)
 [ -x /usr/bin/lesspipe ] && eval "$(lesspipe)"
@@ -41,7 +42,7 @@ if [ -f /etc/bash_completion ]; then
 fi
 
 if [ -d ~/.locals ]; then
-	for file in ~/.locals/*
+    for file in ~/.locals/*
     do
         . $file
     done

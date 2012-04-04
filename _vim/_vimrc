@@ -95,7 +95,6 @@ set et
 
 set pastetoggle=<F12>
 
-set wildignore=*.swp,*.bak,*.pyc,*.class,*.tmp
 
 "lines can only be so long for now
 "set textwidth=119
@@ -128,12 +127,29 @@ autocmd Filetype perl set errorformat=%f:%l:%m
 "doesn't seem to read tex file properly
 autocmd BufNewFile,BufRead *.tex set filetype=tex
 
-set wildignore+=*/.git/*,*/.hg/*,*/.svn/*,*.gz,*.zip,*.o,*.pyc,*.class,*/target/*,*/dist/*,*/build/*
+
+set wildignore=*.swp
+set wildignore+=*.bak
+set wildignore+=*.pyc
+set wildignore+=*.class
+set wildignore+=*.tmp
+set wildignore+=*/.git/*
+set wildignore+=*/.hg/*
+set wildignore+=*/.svn/*
+set wildignore+=*.gz
+set wildignore+=*.zip
+set wildignore+=*.o
+set wildignore+=*.pyc
+set wildignore+=*.class
+set wildignore+=*/target/*
+set wildignore+=*/dist/*
+set wildignore+=*/build/*
 
 "Plugins
 
 "ctrlp
 map <leader>t :CtrlP<CR>
+let g:ctrlp_dotfiles = 1
 
 "buffergator
 let g:buffergator_suppress_keymaps = 1
