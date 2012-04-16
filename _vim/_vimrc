@@ -107,7 +107,7 @@ set t_vb=
 "keep two rows when scrolling
 set scrolloff=2
 
-set t_Co=256
+"set t_Co=256
 colorscheme charles
 set number
 
@@ -155,10 +155,6 @@ let g:ctrlp_dotfiles = 1
 let g:buffergator_suppress_keymaps = 1
 map <leader>b :BuffergatorToggle<CR>
 
-"Pep8
-let g:pyflakes_use_quickfix = 0
-let g:pep8_map='<leader>8'
-
 "NerdTree
 map <leader>n :NERDTreeToggle<CR>
 
@@ -167,3 +163,10 @@ map <leader>g :GundoToggle<CR>
 
 "match it
 ru macros/matchit.vim
+
+"syntastic
+let g:syntastic_check_on_open=1
+
+let g:syntastic_mode_map = { 'mode': 'active',
+                            \ 'active_filetypes': [],
+                            \ 'passive_filetypes': ['html'] }

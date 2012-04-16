@@ -14,6 +14,19 @@ export MANPAGER='less -Xq'
 export PAGER='less -Xq'
 export PYTHONSTARTUP=~/.pystartup
 
+TMP_TERM=$TERM
+export TERM=$TERM-256colors
+SCREEN_COLORS=$(tput colors 2>/dev/null)
+if [ -z "$SCREEN_COLORS" ]; then
+    export TERM=xterm-256color
+    SCREEN_COLORS=$(tput colors 2>/dev/null)
+fi
+if [ -z "$SCREEN_COLORS" ]; then
+    export TERM=$TMP_TERM
+fi
+
+
+
 # make less more friendly for non-text input files, see lesspipe(1)
 [ -x /usr/bin/lesspipe ] && eval "$(lesspipe)"
 [ -x /usr/local/bin/lesspipe.sh ] && eval "$(/usr/local/bin/lesspipe.sh)"
