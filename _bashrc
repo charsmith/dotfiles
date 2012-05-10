@@ -2,6 +2,7 @@
 [ -z "$PS1" ] && return
 
 export HISTCONTROL=ignoreboth
+export HISTIGNORE="fg:exit:clear:history"
 export GDK_NATIVE_WINDOWS=1
 
 shopt -s checkwinsize
