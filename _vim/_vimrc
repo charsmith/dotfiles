@@ -39,12 +39,14 @@ map <C-k> <C-w>k
 map <C-l> <C-w>l
 
 "behaviors 
+set backspace=indent,eol,start
 set splitright 			" put split window on the right
 "set autochdir
 set hlsearch
 set incsearch
 set autoread
 set ruler
+set encoding=utf-8
 
 "make searches case insensitive unless they have capitals in them
 set ignorecase
@@ -80,7 +82,7 @@ set hidden
 map <leader>v 0ma}b:'a,.j<CR>0100 ? <CR>i<CR><Esc>
 
 "autoload vimrc
-autocmd! bufwritepost vimrc source ~/.vimrc
+autocmd BufWritePost $MYVIMRC,~/.dotfiles/vimrc,$MYVIMRC.local nested :source $MYVIMRC
 
 "show syntax highlighting
 syntax on
@@ -144,6 +146,9 @@ set wildignore+=*/dist/*
 set wildignore+=*/target/*
 
 "Plugins
+
+"Powerline
+let g:Powerline_dividers_override = [' >', '>', '< ', '<']
 
 "ctrlp
 map <leader>t :CtrlP<CR>
