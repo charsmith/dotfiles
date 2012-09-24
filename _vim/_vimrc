@@ -110,7 +110,6 @@ set t_vb=
 set scrolloff=2
 
 "set t_Co=256
-colorscheme charles
 set number
 
 if has('gui_running')
@@ -146,6 +145,13 @@ set wildignore+=*/dist/*
 set wildignore+=*/target/*
 
 "Plugins
+
+"Solarized
+set background=dark
+let g:solarized_termcolors = 256
+let g:solarized_visibility = "high"
+let g:solarized_contrast = "high"
+colorscheme solarized
 
 "Powerline
 let g:Powerline_dividers_override = [' >', '>', '< ', '<']
