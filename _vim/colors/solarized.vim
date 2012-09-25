@@ -301,11 +301,11 @@ elseif g:solarized_termcolors != 256 && &t_Co >= 16
 elseif g:solarized_termcolors == 256
     let s:vmode       = "cterm"
     let s:base03      = "0"
-    let s:base02      = "235"
-    let s:base01      = "239"
-    let s:base00      = "240"
-    let s:base0       = "244"
-    let s:base1       = "245"
+    let s:base02      = "233"
+    let s:base01      = "235"
+    let s:base00      = "238"
+    let s:base0       = "255"
+    let s:base1       = "254"
     let s:base2       = "187"
     let s:base3       = "230"
     let s:yellow      = "136"
@@ -314,8 +314,8 @@ elseif g:solarized_termcolors == 256
     let s:magenta     = "125"
     let s:violet      = "61"
     let s:blue        = "33"
-    let s:cyan        = "37"
-    let s:green       = "64"
+    let s:cyan        = "45"
+    let s:green       = "40"
 else
     let s:vmode       = "cterm"
     let s:bright      = "* term=bold cterm=bold"
@@ -656,7 +656,7 @@ exe "hi! DiffText"       .s:fmt_none   .s:fg_blue   .s:bg_base02 .s:sp_blue
 endif
 exe "hi! SignColumn"     .s:fmt_none   .s:fg_base0
 exe "hi! Conceal"        .s:fmt_none   .s:fg_blue   .s:bg_none
-exe "hi! SpellBad"       .s:fmt_curl   .s:fg_none   .s:bg_none    .s:sp_red
+exe "hi! SpellBad"       .s:fmt_none   .s:fg_none   .s:bg_red    .s:sp_red
 exe "hi! SpellCap"       .s:fmt_curl   .s:fg_none   .s:bg_none    .s:sp_violet
 exe "hi! SpellRare"      .s:fmt_curl   .s:fg_none   .s:bg_none    .s:sp_cyan
 exe "hi! SpellLocal"     .s:fmt_curl   .s:fg_none   .s:bg_none    .s:sp_yellow
