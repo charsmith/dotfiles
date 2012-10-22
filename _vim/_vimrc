@@ -152,7 +152,7 @@ let g:solarized_termcolors = 256
 let g:solarized_visibility = "high"
 let g:solarized_contrast = "high"
 let g:solarized_diffmode = "high"
-colorscheme solarized
+colorscheme ron
 
 "Powerline
 let g:Powerline_dividers_override = [' >', '>', '< ', '<']
