@@ -1,15 +1,12 @@
 http://github.com/Lokaltog/vim-powerline _vim/bundle/powerline
-http://github.com/alfredodeza/pytest.vim.git _vim/bundle/py.test
 http://github.com/ddollar/nerdcommenter.git _vim/bundle/nerdcommenter
 http://github.com/ervandew/supertab.git _vim/bundle/supertab
-http://github.com/fs111/pydoc.vim.git _vim/bundle/pydoc
 http://github.com/jeetsukumaran/vim-buffergator.git _vim/bundle/buffergator
 http://github.com/kien/ctrlp.vim.git _vim/bundle/ctrlp
 http://github.com/mileszs/ack.vim.git _vim/bundle/ack
 http://github.com/msanders/snipmate.vim.git _vim/bundle/snipmate
 http://github.com/scrooloose/syntastic.git _vim/bundle/syntastic
 http://github.com/sjl/gundo.vim.git _vim/bundle/gundo
-http://github.com/sontek/rope-vim.git _vim/bundle/ropevim
 http://github.com/tpope/vim-fugitive.git _vim/bundle/fugitive
 http://github.com/tpope/vim-git.git _vim/bundle/git
 http://github.com/tpope/vim-surround.git _vim/bundle/surround
