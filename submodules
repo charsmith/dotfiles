@@ -14,3 +14,5 @@ http://github.com/tpope/vim-fugitive.git _vim/bundle/fugitive
 http://github.com/tpope/vim-git.git _vim/bundle/git
 http://github.com/tpope/vim-surround.git _vim/bundle/surround
 http://github.com/vim-scripts/The-NERD-tree.git _vim/bundle/nerdtree
+http://github.com/airblade/vim-gitgutter.git _vim/bundle/gitgutter
+http://github.com/mattn/zencoding-vim.git _vim/bundle/zencoding

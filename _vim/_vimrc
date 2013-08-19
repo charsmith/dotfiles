@@ -57,6 +57,9 @@ map Y y$
 
 "nnoremap <Esc> :noh<CR><Esc>
 
+"select pasted text
+nnoremap <expr> gp '`[' . strpart(getregtype(), 0, 1) . '`]'
+
 "short messages
 set shortmess=atI
 
