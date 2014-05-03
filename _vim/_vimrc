@@ -157,9 +157,6 @@ let g:solarized_contrast = "high"
 let g:solarized_diffmode = "high"
 colorscheme solarized
 
-"Powerline
-let g:Powerline_dividers_override = [' >', '>', '< ', '<']
-
 "ctrlp
 map <leader>t :CtrlP<CR>
 let g:ctrlp_dotfiles = 1
@@ -176,6 +173,9 @@ map <leader>g :GundoToggle<CR>
 
 "match it
 ru macros/matchit.vim
+
+"airline
+let g:airline_powerline_fonts = 1
 
 "syntastic
 let g:syntastic_check_on_open=1

@@ -10,7 +10,7 @@ shopt -s cdspell #trying this one out
 
 set -o vi
 
-export PATH=${HOME}/bin:${PATH}:/usr/local/sbin
+export PATH=/usr/local/bin:${HOME}/bin:${PATH}:/usr/local/sbin
 export MANPAGER='less -Xq'
 export PAGER='less -Xq'
 export PYTHONSTARTUP=~/.pystartup

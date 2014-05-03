@@ -1,6 +1,4 @@
-https://github.com/Lokaltog/vim-powerline _vim/bundle/powerline
 https://github.com/ddollar/nerdcommenter.git _vim/bundle/nerdcommenter
-https://github.com/ervandew/supertab.git _vim/bundle/supertab
 https://github.com/jeetsukumaran/vim-buffergator.git _vim/bundle/buffergator
 https://github.com/kien/ctrlp.vim.git _vim/bundle/ctrlp
 https://github.com/mileszs/ack.vim.git _vim/bundle/ack
@@ -13,3 +11,4 @@ https://github.com/tpope/vim-surround.git _vim/bundle/surround
 https://github.com/vim-scripts/The-NERD-tree.git _vim/bundle/nerdtree
 https://github.com/airblade/vim-gitgutter.git _vim/bundle/gitgutter
 https://github.com/mattn/zencoding-vim.git _vim/bundle/zencoding
+https://github.com/bling/vim-airline _vim/bundle/vim-airline
