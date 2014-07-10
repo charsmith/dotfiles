@@ -15,7 +15,7 @@ set title
 let mapleader=","
 
 "tabs
-"map <leader>n :tabnew<CR> 
+"map <leader>n :tabnew<CR>
 
 "swap files all in the same place
 "set dir=~/temp
@@ -32,13 +32,13 @@ set ofu=syntaxcomplete#Complete
 "always show the status bar
 set laststatus=2
 
-"move on splits 
+"move on splits
 map <C-h> <C-w>h
 map <C-j> <C-w>j
 map <C-k> <C-w>k
 map <C-l> <C-w>l
 
-"behaviors 
+"behaviors
 set backspace=indent,eol,start
 set splitright 			" put split window on the right
 "set autochdir
@@ -160,6 +160,12 @@ colorscheme solarized
 "ctrlp
 map <leader>t :CtrlP<CR>
 let g:ctrlp_dotfiles = 1
+let g:ctrlp_user_command = {
+  \ 'types': {
+    \ 1: ['.git', 'cd %s && git ls-files --cached --exclude-standard --others']
+    \ },
+  \ 'fallback': 'find %s -type f'
+  \ }
 
 "buffergator
 let g:buffergator_suppress_keymaps = 1
@@ -176,6 +182,7 @@ ru macros/matchit.vim
 
 "airline
 let g:airline_powerline_fonts = 1
+let g:airline#extensions#tabline#enabled = 1
 
 "syntastic
 let g:syntastic_check_on_open=1
@@ -188,4 +195,4 @@ let g:syntastic_mode_map = { 'mode': 'active',
 augroup filetypedetect
     au BufNewFile,BufRead *.pig  set filetype=pig  syntax=pig
     au BufNewFile,BufRead *.hive set filetype=hive syntax=plsql
-augroup END 
+augroup END
