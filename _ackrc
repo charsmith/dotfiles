@@ -1,1 +1,2 @@
 --type-set=pig:ext:pig
+--type-set=ipynb:ext:ipynb

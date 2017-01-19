@@ -61,3 +61,10 @@ if [ -d ~/.locals ]; then
         . $file
     done
 fi
+
+export NVM_DIR="/Users/charsmith/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"  # This loads nvm
+
+#THIS MUST BE AT THE END OF THE FILE FOR SDKMAN TO WORK!!!
+export SDKMAN_DIR="/Users/charsmith/.sdkman"
+[[ -s "/Users/charsmith/.sdkman/bin/sdkman-init.sh" ]] && source "/Users/charsmith/.sdkman/bin/sdkman-init.sh"

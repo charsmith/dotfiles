@@ -6,9 +6,9 @@ https://github.com/msanders/snipmate.vim.git _vim/bundle/snipmate
 https://github.com/scrooloose/syntastic.git _vim/bundle/syntastic
 https://github.com/sjl/gundo.vim.git _vim/bundle/gundo
 https://github.com/tpope/vim-fugitive.git _vim/bundle/fugitive
-https://github.com/tpope/vim-git.git _vim/bundle/git
 https://github.com/tpope/vim-surround.git _vim/bundle/surround
-https://github.com/vim-scripts/The-NERD-tree.git _vim/bundle/nerdtree
 https://github.com/airblade/vim-gitgutter.git _vim/bundle/gitgutter
-https://github.com/mattn/zencoding-vim.git _vim/bundle/zencoding
+https://github.com/mattn/emmet-vim.git _vim/bundle/gitgutter
 https://github.com/bling/vim-airline _vim/bundle/vim-airline
+https://github.com/Valloric/YouCompleteMe.git _vim/bundle/ycm
+https://github.com/majutsushi/tagbar _vim/bundle/tagbar

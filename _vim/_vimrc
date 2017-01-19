@@ -140,9 +140,6 @@ set wildignore+=*.o
 set wildignore+=*.pyc
 set wildignore+=*.tmp
 set wildignore+=*.zip
-set wildignore+=*/.git/*
-set wildignore+=*/.hg/*
-set wildignore+=*/.svn/*
 set wildignore+=*/build/*
 set wildignore+=*/dist/*
 set wildignore+=*/target/*
@@ -190,9 +187,14 @@ let g:syntastic_python_checker = 'pyflakes'
 
 let g:syntastic_mode_map = { 'mode': 'active',
                             \ 'active_filetypes': [],
-                            \ 'passive_filetypes': ['html'] }
+                            \ 'passive_filetypes': ['html', 'java'] }
 
 augroup filetypedetect
     au BufNewFile,BufRead *.pig  set filetype=pig  syntax=pig
     au BufNewFile,BufRead *.hive set filetype=hive syntax=plsql
 augroup END
+
+"Tagbar
+nnoremap zg :Tagbar<CR>
+
+let g:ycm_path_to_python_interpreter = "/usr/local/bin/python"
