@@ -23,13 +23,9 @@ function link_file {
 
 for i in _*
 do
-	clean_link_file $i $1
+	clean_link_file $i ${blah:-${HOME}}
 done
 
 source="${PWD}/_vim/_vimrc"
-target="${1}/.vimrc"
+target="${blah:-${HOME}}/.vimrc"
 link_file $source $target 
-
-rm -rf _vim/bundle/*
-
-cat submodules | perl -e 'while(<>){($a,$b) = split(/\s+/, $_); print `git clone $a $b`;}'
