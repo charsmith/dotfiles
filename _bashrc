@@ -16,10 +16,10 @@ export PAGER='less -Xq'
 export PYTHONSTARTUP=~/.pystartup
 
 TMP_TERM=$TERM
-export TERM=$TERM-256colors
+#export TERM=$TERM-256colors
 SCREEN_COLORS=$(tput colors 2>/dev/null)
 if [ -z "$SCREEN_COLORS" ]; then
-    export TERM=xterm-256color
+#    export TERM=xterm-256color
     SCREEN_COLORS=$(tput colors 2>/dev/null)
 fi
 if [ -z "$SCREEN_COLORS" ]; then
@@ -62,9 +62,5 @@ if [ -d ~/.locals ]; then
     done
 fi
 
-export NVM_DIR="/Users/charsmith/.nvm"
+export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"  # This loads nvm
-
-#THIS MUST BE AT THE END OF THE FILE FOR SDKMAN TO WORK!!!
-export SDKMAN_DIR="/Users/charsmith/.sdkman"
-[[ -s "/Users/charsmith/.sdkman/bin/sdkman-init.sh" ]] && source "/Users/charsmith/.sdkman/bin/sdkman-init.sh"

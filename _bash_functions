@@ -34,3 +34,11 @@ function setjdk() {
 function removeFromPath() {
     export PATH=$(echo $PATH | sed -E -e "s;:$1;;" -e "s;$1:?;;")
 }
+
+function ubuntu() {
+    docker run --rm -it -h ubuntu -v /Users/$USER:/root -v /Users/$USER:/Users/$USER -w $PWD ubuntu bash -l
+}
+
+function u_find() {
+    docker run --entrypoint find --rm -it -h ubuntu -v /Users/$USER:/root -v /Users/$USER:/Users/$USER -w $PWD ubuntu "$@"
+}
