@@ -1,7 +1,3 @@
-git_branch() { 
-	git branch 2>/dev/null | awk '{if ($1=="*") print "(" $2 ")"}'
-}
-
 in_vim() { 
 	in_vim=`ps -T | grep -i 'vim' | grep -v 'grep' | wc -l | awk '{print $1}'`
 	if [ "$in_vim" -gt "0" ]; then
@@ -9,36 +5,7 @@ in_vim() {
 	fi
 	echo  ""
 }
-growl() {
-case "$TERM" in
-screen)
-	echo -e $'\e]9;'$*'\007' > /dev/$(ps | grep [s]creen | tail -1 | awk '{print $2}') ; return ;
-	;;
-*)
-	echo -e $'\e]9;'$*'\007' ; return ;
-    ;;
-esac
-}
-
-function setjdk() {
-    if [ $# -ne 0 ]; then
-        removeFromPath '/System/Library/Frameworks/JavaVM.framework/Home/bin'
-        if [ -n "${JAVA_HOME+x}" ]; then
-            removeFromPath $JAVA_HOME
-        fi
-        export JAVA_HOME=`/usr/libexec/java_home -v 1.$@`
-        export PATH=$JAVA_HOME/bin:$PATH
-    fi
-}
 
 function removeFromPath() {
     export PATH=$(echo $PATH | sed -E -e "s;:$1;;" -e "s;$1:?;;")
-}
-
-function ubuntu() {
-    docker run --rm -it -h ubuntu -v /Users/$USER:/root -v /Users/$USER:/Users/$USER -w $PWD ubuntu bash -l
-}
-
-function u_find() {
-    docker run --entrypoint find --rm -it -h ubuntu -v /Users/$USER:/root -v /Users/$USER:/Users/$USER -w $PWD ubuntu "$@"
 }
