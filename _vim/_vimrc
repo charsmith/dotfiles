@@ -31,6 +31,7 @@ Plug 'junegunn/fzf', { 'dir': '~/.fzf', 'do': './install --all' }
 Plug 'junegunn/fzf.vim'
 
 Plug 'airblade/vim-gitgutter'
+Plug 'lifepillar/vim-solarized8'
 Plug 'majutsushi/tagbar'
 Plug 'mattn/emmet-vim'
 Plug 'scrooloose/nerdcommenter'
@@ -187,11 +188,9 @@ if $TERM == 'xterm'
 endif
 "Solarized
 set background=dark
-let g:solarized_termcolors = 256
 let g:solarized_visibility = "high"
-let g:solarized_contrast = "high"
 let g:solarized_diffmode = "high"
-colorscheme solarized
+colorscheme solarized8
 
 "fzf
 map <leader>t :FZF -m<CR>
