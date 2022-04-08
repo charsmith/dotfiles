@@ -231,7 +231,7 @@ augroup END
 nnoremap zg :Tagbar<CR>
 
 if has('macunix')
-    let g:ycm_path_to_python_interpreter = "/usr/local/bin/python"
+    let g:ycm_path_to_python_interpreter = "/opt/homebrew/bin/python3.9"
 endif
 
 

@@ -1,3 +1,7 @@
+git_branch() {
+    git branch 2>/dev/null | awk '{if ($1=="*") print "(" $2 ")"}'
+}
+
 in_vim() { 
 	in_vim=`ps -T | grep -i 'vim' | grep -v 'grep' | wc -l | awk '{print $1}'`
 	if [ "$in_vim" -gt "0" ]; then
