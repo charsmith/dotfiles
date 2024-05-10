@@ -10,10 +10,15 @@ shopt -s cdspell #trying this one out
 
 set -o vi
 
-export PATH=/usr/local/bin:${HOME}/bin:${PATH}:/usr/local/sbin
+export PATH=/opt/nflx:/opt/nflx/bin:/usr/local/bin:${HOME}/bin:${PATH}:/usr/local/sbin
 export MANPAGER='less -Xq'
 export PAGER='less -Xq'
 export PYTHONSTARTUP=~/.pystartup
+
+
+export PYENV_ROOT="$HOME/.pyenv"
+command -v pyenv >/dev/null || export PATH="$PYENV_ROOT/bin:$PATH"
+eval "$(pyenv init -)"
 
 TMP_TERM=$TERM
 #export TERM=$TERM-256colors
@@ -26,24 +31,19 @@ if [ -z "$SCREEN_COLORS" ]; then
     export TERM=$TMP_TERM
 fi
 
-
+#STARSHIP
+eval "$(starship init bash)"
 
 # make less more friendly for non-text input files, see lesspipe(1)
 [ -x /usr/bin/lesspipe ] && eval "$(lesspipe)"
 [ -x /usr/local/bin/lesspipe.sh ] && eval "$(/usr/local/bin/lesspipe.sh)"
 
-if [ -f ~/.bash_functions ]; then
-    . ~/.bash_functions
+if [ -f ~/.config/bash/bash_functions ]; then
+    . ~/.config/bash/bash_functions
 fi
 
-IN_VIM='$(in_vim)'
-GIT_BRANCH='$(git_branch)'
-PS1="$IN_VIM\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[01;32m\]$GIT_BRANCH\[\033[00m\]\$ "
-#change the terminal title as well
-PS1="\[\e]0;$IN_VIM\u@\h: \w$GIT_BRANCH\a\]$PS1"
-
-if [ -f ~/.bash_aliases ]; then
-    . ~/.bash_aliases
+if [ -f ~/.config/bash/bash_aliases ]; then
+    . ~/.config/bash/bash_aliases
 fi
 
 #bashcompletion
@@ -65,13 +65,4 @@ fi
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"  # This loads nvm
 
-[ -f ~/.fzf.bash ] && source ~/.fzf.bash
-
-GOPATH=$HOME/go
-function _update_ps1() {
-    PS1="$($GOPATH/bin/powerline-go -error $?)"
-}
-if [ "$TERM" != "linux" ] && [ -f "$GOPATH/bin/powerline-go" ]; then
-    PROMPT_COMMAND="_update_ps1; $PROMPT_COMMAND"
-fi
 [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion

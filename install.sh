@@ -26,6 +26,6 @@ do
 	clean_link_file $i ${blah:-${HOME}}
 done
 
-source="${PWD}/_vim/_vimrc"
-target="${blah:-${HOME}}/.vimrc"
 link_file $source $target 
+
+#TODO: install tpm, config files moved

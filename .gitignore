@@ -1,4 +1,2 @@
-_vim/.netrwhist
-_vim/autoload
-_vim/plugged
 _gitconfig
+config/tmux/plugins
