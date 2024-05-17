@@ -28,4 +28,23 @@ done
 
 link_file $source $target 
 
-#TODO: install tpm, config files moved
+
+# Define the source directory (change this to your actual config directory)
+SOURCE_DIR="$PWD/config"
+
+# Check if ~/.config directory exists, create it if not
+if [ ! -d "$HOME/.config" ]; then
+  echo "Creating ~/.config directory..."
+  mkdir -p "$HOME/.config"
+else
+  echo "~/.config directory already exists."
+fi
+
+# Link all files from the source directory to ~/.config/
+for file in "$SOURCE_DIR"/*; do
+  filename=$(basename "$file")
+  ln -s "$file" "$HOME/.config/$filename"
+  echo "Linked $file to $HOME/.config/$filename"
+done
+
+echo "All files linked successfully.".

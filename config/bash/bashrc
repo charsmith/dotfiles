@@ -55,10 +55,19 @@ if [ -f /etc/bash_completion ]; then
     . /etc/bash_completion
 fi
 
-if [ -d ~/.locals ]; then
-    for file in ~/.locals/*
+# Get the directory where the script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Define the relative locals directory
+LOCALS_DIR="$SCRIPT_DIR/locals"
+
+# Check if the locals directory exists
+if [ -d "$LOCALS_DIR" ]; then
+    # Loop through all files in the locals directory
+    for file in "$LOCALS_DIR"/*
     do
-        . $file
+        # Source each file
+        . "$file"
     done
 fi
 
