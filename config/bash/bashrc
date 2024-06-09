@@ -10,17 +10,17 @@ shopt -s cdspell #trying this one out
 
 set -o vi
 
-export PATH=/opt/nflx:/opt/nflx/bin:/usr/local/bin:${HOME}/bin:${PATH}:/usr/local/sbin
+#export PATH=/opt/nflx:/opt/nflx/bin:/usr/local/bin:${HOME}/bin:${PATH}:/usr/local/sbin
 export MANPAGER='less -Xq'
 export PAGER='less -Xq'
-export PYTHONSTARTUP=~/.pystartup
+#export PYTHONSTARTUP=~/.pystartup
 
 
 export PYENV_ROOT="$HOME/.pyenv"
 command -v pyenv >/dev/null || export PATH="$PYENV_ROOT/bin:$PATH"
 eval "$(pyenv init -)"
 
-TMP_TERM=$TERM
+TjP_TERM=$TERM
 #export TERM=$TERM-256colors
 SCREEN_COLORS=$(tput colors 2>/dev/null)
 if [ -z "$SCREEN_COLORS" ]; then
@@ -75,3 +75,6 @@ export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"  # This loads nvm
 
 [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
+
+#JUST BECAUSE
+export NEWT_CONFIGS_DIR=~/code/nflx/newt-configs

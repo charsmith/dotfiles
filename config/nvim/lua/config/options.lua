@@ -16,4 +16,4 @@ vim.opt.shiftwidth = 2
 
 vim.opt.report=100
 
-
+vim.opt.scrolloff=10

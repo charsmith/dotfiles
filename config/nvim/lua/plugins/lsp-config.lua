@@ -23,7 +23,7 @@ return {
       vim.keymap.set({ "n", "v" }, "<leader>ca", vim.lsp.buf.code_action, {})
 
       require("mason-lspconfig").setup({
-        ensure_installed = { "lua_ls", "pyright", "ruff_lsp" },
+        ensure_installed = { "lua_ls", "pyright", "ruff_lsp", "biome" },
         handlers = {
           function(server_name)
             require("lspconfig")[server_name].setup({})
