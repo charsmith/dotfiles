@@ -56,7 +56,7 @@ if [ -f /etc/bash_completion ]; then
 fi
 
 # Get the directory where the script is located
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(get_script_dir)"
 
 # Define the relative locals directory
 LOCALS_DIR="$SCRIPT_DIR/locals"
