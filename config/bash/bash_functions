@@ -1,0 +1,7 @@
+#Bash function to get actual script directory
+get_script_dir() {
+    local source="${BASH_SOURCE[0]}"
+    local dir
+    dir="$( cd -P "$( dirname "$source" )" && pwd )"
+    echo "$dir"
+}

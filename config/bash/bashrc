@@ -1,80 +1,78 @@
-# If not running interactively, don't do anything
-[ -z "$PS1" ] && return
+#!/bin/bash
 
+# If not running interactively, don't do anything
+[[ $- != *i* ]] && return
+
+# History settings
 export HISTCONTROL=ignoreboth
 export HISTIGNORE="fg:exit:clear:history"
-export GDK_NATIVE_WINDOWS=1
 
+# Shell options
 shopt -s checkwinsize
-shopt -s cdspell #trying this one out
-
+shopt -s cdspell
 set -o vi
 
-#export PATH=/opt/nflx:/opt/nflx/bin:/usr/local/bin:${HOME}/bin:${PATH}:/usr/local/sbin
+# Environment variables
+export GDK_NATIVE_WINDOWS=1
 export MANPAGER='less -Xq'
 export PAGER='less -Xq'
-#export PYTHONSTARTUP=~/.pystartup
+export NEWT_CONFIGS_DIR=~/code/nflx/newt-configs
 
-
+# Path modifications
 export PYENV_ROOT="$HOME/.pyenv"
 command -v pyenv >/dev/null || export PATH="$PYENV_ROOT/bin:$PATH"
 eval "$(pyenv init -)"
 
-TjP_TERM=$TERM
-#export TERM=$TERM-256colors
-SCREEN_COLORS=$(tput colors 2>/dev/null)
-if [ -z "$SCREEN_COLORS" ]; then
-#    export TERM=xterm-256color
+# Terminal color settings
+setup_terminal_colors() {
+  local TMP_TERM=$TERM
+  SCREEN_COLORS=$(tput colors 2>/dev/null)
+  if [[ -z $SCREEN_COLORS ]]; then
+    export TERM=xterm-256color
     SCREEN_COLORS=$(tput colors 2>/dev/null)
-fi
-if [ -z "$SCREEN_COLORS" ]; then
+  fi
+  if [[ -z $SCREEN_COLORS ]]; then
     export TERM=$TMP_TERM
-fi
+  fi
+}
+setup_terminal_colors
 
-#STARSHIP
+# Starship prompt
 eval "$(starship init bash)"
 
-# make less more friendly for non-text input files, see lesspipe(1)
-[ -x /usr/bin/lesspipe ] && eval "$(lesspipe)"
-[ -x /usr/local/bin/lesspipe.sh ] && eval "$(/usr/local/bin/lesspipe.sh)"
+# Less settings
+[[ -x /usr/bin/lesspipe ]] && eval "$(lesspipe)"
+[[ -x /usr/local/bin/lesspipe.sh ]] && eval "$(/usr/local/bin/lesspipe.sh)"
 
-if [ -f ~/.config/bash/bash_functions ]; then
-    . ~/.config/bash/bash_functions
-fi
+# Source additional configuration files
+source_if_exists() {
+  [[ -f $1 ]] && source "$1"
+}
 
-if [ -f ~/.config/bash/bash_aliases ]; then
-    . ~/.config/bash/bash_aliases
-fi
+source_if_exists ~/.config/bash/bash_functions
+source_if_exists ~/.config/bash/bash_aliases
+source_if_exists /usr/local/etc/bash_completion
+source_if_exists /etc/bash_completion
 
-#bashcompletion
-if [ -f /usr/local/etc/bash_completion ]; then
-    . /usr/local/etc/bash_completion
-fi
-
-if [ -f /etc/bash_completion ]; then
-    . /etc/bash_completion
-fi
-
-# Get the directory where the script is located
-SCRIPT_DIR="$(get_script_dir)"
-
-# Define the relative locals directory
-LOCALS_DIR="$SCRIPT_DIR/locals"
-
-# Check if the locals directory exists
-if [ -d "$LOCALS_DIR" ]; then
-    # Loop through all files in the locals directory
-    for file in "$LOCALS_DIR"/*
-    do
-        # Source each file
-        . "$file"
+# Source local configuration files
+source_locals() {
+  local SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]}")"
+  local LOCALS_DIR="$SCRIPT_DIR/locals"
+  if [[ -d $LOCALS_DIR ]]; then
+    for file in "$LOCALS_DIR"/*; do
+      source "$file"
     done
-fi
+  fi
+}
+source_locals
 
+# NVM setup
 export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"  # This loads nvm
+source_if_exists "$NVM_DIR/nvm.sh"
+source_if_exists "$NVM_DIR/bash_completion"
 
-[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
-
-#JUST BECAUSE
-export NEWT_CONFIGS_DIR=~/code/nflx/newt-configs
+# Initialize zoxide and alias cd to z if available
+if command -v zoxide &>/dev/null; then
+  eval "$(zoxide init bash)"
+  alias cd="z"
+fi
