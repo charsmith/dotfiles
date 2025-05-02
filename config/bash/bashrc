@@ -76,3 +76,5 @@ if command -v zoxide &>/dev/null; then
   eval "$(zoxide init bash)"
   alias cd="z"
 fi
+
+source_if_exists ~/.local/bin/env
