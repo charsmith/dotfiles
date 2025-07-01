@@ -21,6 +21,18 @@ function link_file {
     ln -sf ${source} ${target}
 }
 
+function link {
+	source=$1
+	target=$2
+
+    #don't try to relink something
+    if [ -h "${target}" ]; then
+        return
+    fi
+
+    ln -s ${source} ${target}
+}
+
 for i in _*
 do
 	clean_link_file $i ${blah:-${HOME}}
@@ -43,7 +55,7 @@ fi
 # Link all files from the source directory to ~/.config/
 for file in "$SOURCE_DIR"/*; do
   filename=$(basename "$file")
-  ln -s "$file" "$HOME/.config/$filename"
+  link "$file" "$HOME/.config/$filename"
   echo "Linked $file to $HOME/.config/$filename"
 done
 

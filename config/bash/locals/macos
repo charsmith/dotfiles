@@ -3,5 +3,5 @@ if [[ "$(uname)" == "Darwin" ]]; then
   function set_secret_env {
     export $1=$(security find-generic-password -a $USER -s "$1" -w)
   }
-  set_secret_env ANTHROPIC_API_KEY
+  #set_secret_env ANTHROPIC_API_KEY
 fi

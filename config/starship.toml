@@ -1,7 +1,6 @@
 "$schema" = 'https://starship.rs/config-schema.json'
 
-format = """
-[](surface0)\
+format = """[](surface0)\
 $os\
 $username\
 [](bg:peach fg:surface0)\
@@ -24,6 +23,7 @@ $docker_context\
 $line_break$character"""
 
 palette = 'catppuccin_mocha'
+add_newline = false
 
 [palettes.gruvbox_dark]
 color_fg0 = '#fbf1c7'

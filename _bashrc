@@ -1,6 +1,7 @@
-source .config/bash/bashrc
-. "$HOME/.cargo/env"
+source_if_exists() {
+  [[ -f $1 ]] && source "$1"
+}
 
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
-[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
+source_if_exists .config/bash/bashrc
+
+source_if_exists "$HOME/.cargo/env"
