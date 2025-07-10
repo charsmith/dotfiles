@@ -2,6 +2,7 @@ source_if_exists() {
   [[ -f $1 ]] && source "$1"
 }
 
-source_if_exists .config/bash/bashrc
+source_if_exists ~/.config/bash/bashrc
 
 source_if_exists "$HOME/.cargo/env"
+. "$HOME/.cargo/env"

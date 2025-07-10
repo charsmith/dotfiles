@@ -23,15 +23,15 @@ return {
 			vim.keymap.set({ "n", "v" }, "<leader>ca", vim.lsp.buf.code_action, {})
 
 			require("mason-lspconfig").setup({
-				ensure_installed = { "lua_ls", "pyright", "ruff", "biome" },
+				ensure_installed = { "lua_ls", "basedpyright", "ruff", "biome" },
 				handlers = {
 					function(server_name)
 						require("lspconfig")[server_name].setup({})
 					end,
-					pyright = function()
-						require("lspconfig").pyright.setup({
+					basedpyright = function()
+						require("lspconfig").basedpyright.setup({
 							settings = {
-								pyright = {
+								basedpyright = {
 									-- Using Ruff's import organizer
 									disableOrganizeImports = true,
 								},
