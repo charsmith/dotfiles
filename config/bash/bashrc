@@ -21,6 +21,8 @@ export NEWT_CONFIGS_DIR=~/code/nflx/newt-configs
 # Path modifications
 export PYENV_ROOT="$HOME/.pyenv"
 command -v pyenv >/dev/null || export PATH="$PYENV_ROOT/bin:$PATH"
+export PATH="$HOME/.local/bin:$PATH"
+
 eval "$(pyenv init -)"
 
 # Terminal color settings

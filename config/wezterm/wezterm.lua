@@ -7,7 +7,6 @@ local config = wezterm.config_builder()
 config.initial_cols = 120
 config.initial_rows = 28
 
-config.font_size = 10
 config.color_scheme = "Catppuccin Mocha"
 
 config.hide_tab_bar_if_only_one_tab = true
@@ -15,10 +14,10 @@ config.hide_tab_bar_if_only_one_tab = true
 config.native_macos_fullscreen_mode = true
 
 config.window_padding = {
-	left = 0,
-	right = 0,
-	top = 0,
-	bottom = 0,
+  left = 5,
+  right = 5,
+  top = 5,
+  bottom = 5,
 }
 
 config.font = wezterm.font("RobotoMono Nerd Font")

@@ -38,7 +38,6 @@ do
 	clean_link_file $i ${blah:-${HOME}}
 done
 
-link_file $source $target 
 
 
 # Define the source directory (change this to your actual config directory)
