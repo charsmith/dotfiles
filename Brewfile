@@ -1,5 +1,3 @@
-tap "homebrew/bundle"
-
 brew "starship"
 brew "tmux"
 brew "pyenv"
