@@ -14,4 +14,6 @@ brew "direnv"
 brew "bash-completion@2"
 brew "neovim"
 
-cask "wezterm"
+# wezterm is installed separately by scripts/install-deps-macos.sh — the
+# Homebrew cask API has periodically failed to parse it, so keeping it
+# out of `brew bundle` avoids blocking the formula installs.

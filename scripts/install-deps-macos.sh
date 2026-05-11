@@ -21,6 +21,14 @@ fi
 
 brew bundle --file="$REPO_DIR/Brewfile"
 
+# wezterm: install as a cask, but don't let a flaky cask block the rest.
+if ! brew list --cask wezterm &>/dev/null; then
+  echo "Installing wezterm cask..."
+  brew install --cask wezterm || echo "wezterm install failed — continuing." >&2
+else
+  echo "wezterm already installed, skipping."
+fi
+
 # nvm is intentionally installed via its official script (Homebrew nvm is discouraged)
 if [[ ! -d "$HOME/.nvm" ]]; then
   echo "Installing nvm..."
