@@ -36,15 +36,14 @@ bash ~/.dotfiles/scripts/install-deps-macos.sh    # or install-deps-ubuntu.sh
 
 - `config/<name>/` → symlinked as `~/.config/<name>`
 - `_<name>` in repo root → symlinked as `~/.<name>` (underscore becomes dot)
-- `install.sh` skips already-symlinked targets; backs up existing files to `<file>.bak`
+- `scripts/install-symlinks.sh` skips already-symlinked targets; backs up existing files to `<file>.bak`
 
 ## Config Structure
 
 | Path | Purpose |
 |------|---------|
-| `config/bash/bashrc` | Main bash config — sources functions, aliases, locals |
+| `config/bash/bashrc` | Main bash config — sources aliases and locals |
 | `config/bash/bash_aliases` | Shell aliases (`vi=nvim`, `cd=z`, ls variants) |
-| `config/bash/bash_functions` | Bash utility functions |
 | `config/bash/locals/macos` | macOS-specific env (reads secrets from macOS Keychain) |
 | `config/bash/locals/linux` | Linux-specific env |
 | `config/nvim/` | Neovim config (LazyVim-based) |
@@ -73,5 +72,5 @@ The function exports the value as an env var at shell startup. Do not hardcode s
 ## Adding a New Config
 
 1. Add files under `config/<tool>/`
-2. Re-run `bash install.sh` to create the symlink at `~/.config/<tool>`
-3. For a dotfile in `~/`, add `_<name>` to the repo root and re-run install
+2. Re-run `bash scripts/install-symlinks.sh` to create the symlink at `~/.config/<tool>`
+3. For a dotfile in `~/`, add `_<name>` to the repo root and re-run the symlink script
