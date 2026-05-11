@@ -12,6 +12,8 @@ end
 vim.opt.rtp:prepend(lazypath)
 
 require("lazy").setup("plugins", {
+  -- Default to eager load; plugins that should defer set `event`, `cmd`,
+  -- `keys`, or `ft` in their own spec (which implicitly lazy-loads them).
   defaults = { lazy = false },
   ui = {
     border = "rounded",
