@@ -42,8 +42,9 @@ bash ~/.dotfiles/scripts/install-deps-macos.sh    # or install-deps-ubuntu.sh
 
 | Path | Purpose |
 |------|---------|
-| `config/bash/bashrc` | Main bash config — sources aliases and locals |
+| `config/bash/bashrc` | Main bash config — sources functions, aliases, locals |
 | `config/bash/bash_aliases` | Shell aliases (`vi=nvim`, `cd=z`, ls variants) |
+| `config/bash/bash_functions` | Bash utility functions (`mkcd`, `extract`, `gho`) |
 | `config/bash/locals/macos` | macOS-specific env (reads secrets from macOS Keychain) |
 | `config/bash/locals/linux` | Linux-specific env |
 | `config/nvim/` | Neovim config (LazyVim-based) |
