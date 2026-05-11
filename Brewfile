@@ -10,6 +10,7 @@ brew "bat"
 brew "eza"
 brew "fd"
 brew "ripgrep"
+brew "direnv"
 brew "neovim"
 
 cask "wezterm"

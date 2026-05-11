@@ -98,6 +98,11 @@ if command -v zoxide &>/dev/null; then
   eval "$(zoxide init bash)"
 fi
 
+# direnv: per-directory env. Loads .envrc on cd into an allowed dir.
+if command -v direnv &>/dev/null; then
+  eval "$(direnv hook bash)"
+fi
+
 # fzf: Ctrl-R history search, Ctrl-T file picker, Alt-C dir picker.
 # Prefer fd for traversal (respects .gitignore) and bat for previews.
 if command -v fzf &>/dev/null; then
