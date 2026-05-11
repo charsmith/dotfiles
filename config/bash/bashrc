@@ -61,7 +61,6 @@ source_if_exists() {
   [[ -f $1 ]] && source "$1"
 }
 
-source_if_exists ~/.config/bash/bash_functions
 source_if_exists ~/.config/bash/bash_aliases
 source_if_exists /usr/local/etc/bash_completion
 source_if_exists /opt/homebrew/etc/bash_completion
@@ -84,10 +83,9 @@ export NVM_DIR="$HOME/.nvm"
 source_if_exists "$NVM_DIR/nvm.sh"
 source_if_exists "$NVM_DIR/bash_completion"
 
-# Initialize zoxide and alias cd to z if available
+# Initialize zoxide if available (the `cd` -> `z` alias lives in bash_aliases)
 if command -v zoxide &>/dev/null; then
   eval "$(zoxide init bash)"
-  alias cd="z"
 fi
 
 source_if_exists ~/.local/bin/env

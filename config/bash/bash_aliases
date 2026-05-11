@@ -4,3 +4,6 @@ alias la='ls -A'
 alias lal='ls -Alh'
 alias l='ls -CF'
 alias vi='nvim'
+
+# Only alias cd -> z when zoxide is installed (resolved at command time)
+command -v zoxide >/dev/null 2>&1 && alias cd='z'
