@@ -3,6 +3,4 @@ source_if_exists() {
 }
 
 source_if_exists ~/.config/bash/bashrc
-
 source_if_exists "$HOME/.cargo/env"
-. "$HOME/.cargo/env"
