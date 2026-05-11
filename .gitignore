@@ -1,2 +1,3 @@
 _gitconfig
 config/tmux/plugins
+*.bak
