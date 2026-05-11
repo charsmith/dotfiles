@@ -1,17 +1,11 @@
 #!/usr/bin/env bash
 # Install dependencies on macOS via Homebrew.
+# Packages are declared in the repo-root Brewfile.
 
 set -euo pipefail
 
-BREW_PACKAGES=(
-  starship
-  tmux
-  pyenv
-  uv
-  zoxide
-  neovim
-  wezterm
-)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Install Homebrew if missing
 if ! command -v brew &>/dev/null; then
@@ -25,14 +19,7 @@ if ! command -v brew &>/dev/null; then
   fi
 fi
 
-for pkg in "${BREW_PACKAGES[@]}"; do
-  if brew list --formula "$pkg" &>/dev/null || brew list --cask "$pkg" &>/dev/null; then
-    echo "$pkg already installed, skipping."
-  else
-    echo "Installing $pkg..."
-    brew install "$pkg"
-  fi
-done
+brew bundle --file="$REPO_DIR/Brewfile"
 
 # nvm is intentionally installed via its official script (Homebrew nvm is discouraged)
 if [[ ! -d "$HOME/.nvm" ]]; then
