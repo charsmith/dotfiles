@@ -17,6 +17,11 @@ APT_PACKAGES=(
   git
   tmux
   unzip
+  fzf
+  bat
+  fd-find
+  ripgrep
+  direnv
   # pyenv build deps
   libssl-dev
   zlib1g-dev

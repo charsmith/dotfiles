@@ -98,4 +98,18 @@ if command -v zoxide &>/dev/null; then
   eval "$(zoxide init bash)"
 fi
 
+# fzf: Ctrl-R history search, Ctrl-T file picker, Alt-C dir picker.
+# Prefer fd for traversal (respects .gitignore) and bat for previews.
+if command -v fzf &>/dev/null; then
+  eval "$(fzf --bash 2>/dev/null)"
+  if command -v fd &>/dev/null; then
+    export FZF_DEFAULT_COMMAND='fd --type f --hidden --follow --exclude .git'
+    export FZF_CTRL_T_COMMAND="$FZF_DEFAULT_COMMAND"
+    export FZF_ALT_C_COMMAND='fd --type d --hidden --follow --exclude .git'
+  fi
+  if command -v bat &>/dev/null; then
+    export FZF_CTRL_T_OPTS="--preview 'bat --style=numbers --color=always --line-range :200 {}'"
+  fi
+fi
+
 source_if_exists ~/.local/bin/env
