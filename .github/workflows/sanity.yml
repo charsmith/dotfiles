@@ -1,0 +1,36 @@
+name: sanity
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  shell-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: bash -n every shell script
+        run: |
+          set -euo pipefail
+          mapfile -t scripts < <(find . -type f \( -name '*.sh' -o -name '_bashrc' \) -not -path './config/tmux/plugins/*')
+          for f in "${scripts[@]}"; do
+            echo "Checking $f"
+            bash -n "$f"
+          done
+      - name: shellcheck
+        run: |
+          shellcheck -S warning bootstrap.sh scripts/*.sh || true
+
+  symlink-dry-run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dry install into tempdir
+        run: |
+          set -euo pipefail
+          TARGET=$(mktemp -d)
+          TARGET_HOME="$TARGET" bash scripts/install-symlinks.sh
+          test -L "$TARGET/.bashrc"
+          test -L "$TARGET/.config/nvim"
+          test -L "$TARGET/.config/tmux"
+          echo "Symlinks created successfully under $TARGET"
