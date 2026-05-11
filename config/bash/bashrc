@@ -6,10 +6,14 @@
 # History settings
 export HISTCONTROL=ignoreboth
 export HISTIGNORE="fg:exit:clear:history"
+export HISTSIZE=100000
+export HISTFILESIZE=100000
+export HISTTIMEFORMAT="%F %T "
 
 # Shell options
 shopt -s checkwinsize
 shopt -s cdspell
+shopt -s histappend
 set -o vi
 
 # Environment variables
