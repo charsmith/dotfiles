@@ -162,6 +162,7 @@ format = '[[ $symbol( $version) ](fg:base bg:teal)]($style)'
 symbol = ""
 style = "bg:teal"
 format = '[[ $symbol( $version) ](fg:base bg:teal)]($style)'
+python_binary = ["python3", "python"]
 
 [docker_context]
 symbol = ""
