@@ -17,6 +17,7 @@ APT_PACKAGES=(
   git
   tmux
   unzip
+  bash-completion
   fzf
   bat
   fd-find

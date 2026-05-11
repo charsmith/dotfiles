@@ -11,6 +11,7 @@ brew "eza"
 brew "fd"
 brew "ripgrep"
 brew "direnv"
+brew "bash-completion@2"
 brew "neovim"
 
 cask "wezterm"
