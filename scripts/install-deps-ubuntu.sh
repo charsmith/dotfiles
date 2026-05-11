@@ -45,6 +45,27 @@ echo "Updating apt..."
 sudo apt-get update -y
 sudo apt-get install -y "${APT_PACKAGES[@]}"
 
+# Ubuntu ships bat as `batcat` and fd-find as `fdfind` to avoid name clashes.
+# The bashrc and fzf integration expect `bat` and `fd`, so shim them into
+# ~/.local/bin (already on PATH per bashrc).
+mkdir -p "$HOME/.local/bin"
+if command -v batcat >/dev/null 2>&1 && ! command -v bat >/dev/null 2>&1; then
+  ln -sf "$(command -v batcat)" "$HOME/.local/bin/bat"
+fi
+if command -v fdfind >/dev/null 2>&1 && ! command -v fd >/dev/null 2>&1; then
+  ln -sf "$(command -v fdfind)" "$HOME/.local/bin/fd"
+fi
+
+# eza isn't in default apt; pull from its GitHub release.
+if ! command -v eza &>/dev/null; then
+  echo "Installing eza..."
+  tmp="$(mktemp -d)"
+  curl -fsSL "https://github.com/eza-community/eza/releases/latest/download/eza_x86_64-unknown-linux-gnu.tar.gz" -o "$tmp/eza.tar.gz"
+  tar -C "$tmp" -xzf "$tmp/eza.tar.gz"
+  install -m 0755 "$tmp/eza" "$HOME/.local/bin/eza"
+  rm -rf "$tmp"
+fi
+
 # neovim: install to /opt/nvim-linux64 (matches config/bash/locals/linux PATH)
 if [[ ! -x /opt/nvim-linux64/bin/nvim ]]; then
   echo "Installing neovim ($NVIM_VERSION)..."
