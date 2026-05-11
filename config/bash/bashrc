@@ -69,6 +69,7 @@ source_if_exists() {
   [[ -f $1 ]] && source "$1"
 }
 
+source_if_exists ~/.config/bash/bash_functions
 source_if_exists ~/.config/bash/bash_aliases
 source_if_exists /usr/local/etc/bash_completion
 source_if_exists /opt/homebrew/etc/bash_completion

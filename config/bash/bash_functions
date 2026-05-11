@@ -1,0 +1,36 @@
+# Bash utility functions.
+
+# mkdir + cd in one step.
+mkcd() {
+  [[ $# -eq 1 ]] || { echo "usage: mkcd <dir>" >&2; return 2; }
+  mkdir -p -- "$1" && cd -- "$1"
+}
+
+# Extract most common archive types by sniffing the extension.
+extract() {
+  [[ $# -eq 1 && -f $1 ]] || { echo "usage: extract <archive>" >&2; return 2; }
+  case "$1" in
+    *.tar.bz2|*.tbz2) tar -xjf "$1" ;;
+    *.tar.gz|*.tgz)   tar -xzf "$1" ;;
+    *.tar.xz|*.txz)   tar -xJf "$1" ;;
+    *.tar.zst)        tar --zstd -xf "$1" ;;
+    *.tar)            tar -xf  "$1" ;;
+    *.bz2)            bunzip2  "$1" ;;
+    *.gz)             gunzip   "$1" ;;
+    *.xz)             unxz     "$1" ;;
+    *.zip)            unzip    "$1" ;;
+    *.7z)             7z x     "$1" ;;
+    *.rar)            unrar x  "$1" ;;
+    *) echo "extract: don't know how to handle '$1'" >&2; return 1 ;;
+  esac
+}
+
+# Open the current git repo on GitHub/GHE in the browser.
+gho() {
+  local remote
+  remote="$(git remote get-url origin 2>/dev/null)" || { echo "gho: not a git repo or no origin" >&2; return 1; }
+  remote="${remote%.git}"
+  remote="${remote/git@/https://}"
+  remote="${remote/com:/com/}"
+  command -v open >/dev/null 2>&1 && open "$remote" || xdg-open "$remote"
+}
