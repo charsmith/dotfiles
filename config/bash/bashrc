@@ -14,7 +14,11 @@ set -o vi
 
 # Environment variables
 export GDK_NATIVE_WINDOWS=1
-export MANPAGER='less -Xq'
+if command -v nvim >/dev/null 2>&1; then
+  export MANPAGER='nvim +Man!'
+else
+  export MANPAGER='less -Xq'
+fi
 export PAGER='less -Xq'
 #export NEWT_CONFIGS_DIR=~/code/nflx/newt-configs
 
