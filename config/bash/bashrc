@@ -70,15 +70,16 @@ source_if_exists /usr/local/etc/bash_completion
 source_if_exists /opt/homebrew/etc/bash_completion
 source_if_exists /etc/bash_completion
 
-# Source local configuration files
+# Source the local file matching the current OS
 source_locals() {
   local SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]}")"
-  local LOCALS_DIR="$SCRIPT_DIR/locals"
-  if [[ -d $LOCALS_DIR ]]; then
-    for file in "$LOCALS_DIR"/*; do
-      source "$file"
-    done
-  fi
+  local os
+  case "$(uname)" in
+    Darwin) os=macos ;;
+    Linux)  os=linux ;;
+    *) return ;;
+  esac
+  source_if_exists "$SCRIPT_DIR/locals/$os.sh"
 }
 source_locals
 
