@@ -15,6 +15,7 @@ APT_PACKAGES=(
   ca-certificates
   curl
   git
+  gh
   tmux
   unzip
   bash-completion

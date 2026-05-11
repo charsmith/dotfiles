@@ -1,3 +1,5 @@
+brew "git"
+brew "gh"
 brew "starship"
 brew "tmux"
 brew "pyenv"
