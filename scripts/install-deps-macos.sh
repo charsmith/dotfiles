@@ -29,6 +29,27 @@ else
   echo "wezterm already installed, skipping."
 fi
 
+# tree-sitter CLI: required by nvim-treesitter (main branch) to compile parsers.
+# The Homebrew tree-sitter formula is library-only (no CLI binary), so we pull
+# the pre-built binary from GitHub releases instead.
+if ! command -v tree-sitter &>/dev/null; then
+  echo "Installing tree-sitter CLI..."
+  arch="$(uname -m)"
+  case "$arch" in
+    arm64)  ts_arch="arm64" ;;
+    x86_64) ts_arch="x64" ;;
+    *) echo "Unsupported arch $arch for tree-sitter, skipping." >&2; ts_arch="" ;;
+  esac
+  if [[ -n "$ts_arch" ]]; then
+    mkdir -p "$HOME/.local/bin"
+    curl -fsSL "https://github.com/tree-sitter/tree-sitter/releases/latest/download/tree-sitter-macos-${ts_arch}.gz" \
+      | gunzip > "$HOME/.local/bin/tree-sitter"
+    chmod +x "$HOME/.local/bin/tree-sitter"
+  fi
+else
+  echo "tree-sitter already installed, skipping."
+fi
+
 # nvm is intentionally installed via its official script (Homebrew nvm is discouraged)
 if [[ ! -d "$HOME/.nvm" ]]; then
   echo "Installing nvm..."

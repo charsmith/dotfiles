@@ -111,6 +111,17 @@ else
   echo "uv already installed, skipping."
 fi
 
+# tree-sitter CLI: required by nvim-treesitter (main branch) to compile parsers.
+if ! command -v tree-sitter &>/dev/null; then
+  echo "Installing tree-sitter CLI..."
+  mkdir -p "$HOME/.local/bin"
+  curl -fsSL "https://github.com/tree-sitter/tree-sitter/releases/latest/download/tree-sitter-linux-x64.gz" \
+    | gunzip > "$HOME/.local/bin/tree-sitter"
+  chmod +x "$HOME/.local/bin/tree-sitter"
+else
+  echo "tree-sitter already installed, skipping."
+fi
+
 # nvm
 if [[ ! -d "$HOME/.nvm" ]]; then
   echo "Installing nvm..."
