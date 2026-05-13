@@ -25,6 +25,16 @@ extract() {
   esac
 }
 
+# Send a WezTerm toast notification, wrapping for tmux passthrough when needed.
+notify() {
+  local msg="${1:-Done}"
+  if [[ -n "$TMUX" ]]; then
+    printf "\ePtmux;\e\e]9;%s\a\e\\" "$msg"
+  else
+    printf "\e]9;%s\a" "$msg"
+  fi
+}
+
 # Open the current git repo on GitHub/GHE in the browser.
 gho() {
   local remote
