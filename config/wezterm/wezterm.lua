@@ -23,5 +23,7 @@ config.window_padding = {
 config.font = wezterm.font("JetBrainsMono Nerd Font Mono")
 config.font_size = 14
 
+config.notification_handling = "AlwaysShow"
+
 -- Finally, return the configuration to wezterm:
 return config
