@@ -28,6 +28,7 @@ bash ~/.dotfiles/scripts/install-deps-macos.sh    # or install-deps-ubuntu.sh
 | Script | Role |
 |--------|------|
 | `bootstrap.sh` | Entry point. Detects OS via `uname` + `/etc/os-release`, clones repo if missing, runs the right deps script, then symlinks. |
+| `scripts/Brewfile` | Homebrew bundle — declarative list of all macOS packages/casks/taps. |
 | `scripts/install-deps-macos.sh` | Homebrew + nvm (via official installer). |
 | `scripts/install-deps-ubuntu.sh` | apt for system pkgs + pyenv build deps; GitHub release tarball for neovim (to `/opt/nvim-linux64`); official installers for starship, zoxide, pyenv, nvm. |
 | `scripts/install-symlinks.sh` | Symlinks only — no package installs. Uses `TARGET_HOME` env var (defaults to `$HOME`) so it can be dry-tested. |
@@ -44,7 +45,7 @@ bash ~/.dotfiles/scripts/install-deps-macos.sh    # or install-deps-ubuntu.sh
 |------|---------|
 | `config/bash/bashrc` | Main bash config — sources functions, aliases, locals |
 | `config/bash/bash_aliases` | Shell aliases (`vi=nvim`, `cd=z`, ls variants) |
-| `config/bash/bash_functions` | Bash utility functions (`mkcd`, `extract`, `gho`) |
+| `config/bash/bash_functions` | Bash utility functions (`mkcd`, `extract`, `gho`, `notify`) |
 | `config/bash/locals/macos` | macOS-specific env (reads secrets from macOS Keychain) |
 | `config/bash/locals/linux` | Linux-specific env |
 | `config/nvim/` | Neovim config (LazyVim-based) |
@@ -52,6 +53,7 @@ bash ~/.dotfiles/scripts/install-deps-macos.sh    # or install-deps-ubuntu.sh
 | `config/tmux/plugins/` | Vendored tmux plugins (tpm, catppuccin, vim-tmux-navigator) |
 | `config/starship.toml` | Starship prompt config |
 | `config/wezterm/wezterm.lua` | WezTerm terminal config |
+| `config/claude/statusline-command.sh` | Claude Code status line renderer (catppuccin mocha, shows dir/git/model/ctx%) |
 | `_bashrc` | `~/.bashrc` entry point — sources `~/.config/bash/bashrc` |
 | `_inputrc` | Readline config |
 | `_tmux.conf` | `~/.tmux.conf` entry point |
@@ -61,6 +63,34 @@ bash ~/.dotfiles/scripts/install-deps-macos.sh    # or install-deps-ubuntu.sh
 Built on [LazyVim](https://www.lazyvim.org/). Entry: `config/nvim/init.lua` loads `config.options` then `config.lazy`. Plugin specs live in `config/nvim/lua/plugins/`. `lazy-lock.json` pins plugin versions.
 
 Key plugins: catppuccin theme, telescope, neo-tree, lualine, noice, treesitter, nvim-tmux-navigator, completion stack.
+
+To update all plugins and refresh the lockfile, run `:Lazy sync` inside Neovim. Commit the resulting `lazy-lock.json` change as a separate `chore(nvim)` commit.
+
+## Reloading Configs
+
+After editing a config, apply changes without restarting:
+
+| Config | Reload command |
+|--------|---------------|
+| bash | `source ~/.bashrc` |
+| tmux | `tmux source ~/.tmux.conf` |
+| neovim plugins | `:Lazy sync` inside nvim |
+| starship | automatic on next prompt |
+| wezterm | automatic (hot reload enabled) |
+
+## `notify()` Function
+
+`config/bash/bash_functions` defines a `notify` function that sends WezTerm toast notifications, routing through tmux when inside a tmux session. Use it for long-running commands:
+
+```bash
+sleep 10 && notify "Build done"
+```
+
+## Commit Scopes
+
+Use these scopes consistently when committing changes to this repo:
+
+`nvim`, `bash`, `tmux`, `wezterm`, `starship`, `claude`, `scripts`, `bootstrap`, `notifications`
 
 ## Secrets (macOS)
 
@@ -75,3 +105,4 @@ The function exports the value as an env var at shell startup. Do not hardcode s
 1. Add files under `config/<tool>/`
 2. Re-run `bash scripts/install-symlinks.sh` to create the symlink at `~/.config/<tool>`
 3. For a dotfile in `~/`, add `_<name>` to the repo root and re-run the symlink script
+4. Add a row to the Config Structure table above

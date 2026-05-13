@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install dependencies on macOS via Homebrew.
-# Packages are declared in the repo-root Brewfile.
+# Packages are declared in scripts/Brewfile.
 
 set -euo pipefail
 
@@ -19,7 +19,7 @@ if ! command -v brew &>/dev/null; then
   fi
 fi
 
-brew bundle --file="$REPO_DIR/Brewfile"
+brew bundle --file="$SCRIPT_DIR/Brewfile"
 
 # wezterm: install as a cask, but don't let a flaky cask block the rest.
 if ! brew list --cask wezterm &>/dev/null; then
