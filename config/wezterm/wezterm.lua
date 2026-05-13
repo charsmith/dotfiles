@@ -14,13 +14,13 @@ config.hide_tab_bar_if_only_one_tab = true
 config.native_macos_fullscreen_mode = true
 
 config.window_padding = {
-  left = 5,
-  right = 5,
-  top = 5,
-  bottom = 5,
+	left = 5,
+	right = 5,
+	top = 5,
+	bottom = 5,
 }
 
-config.font = wezterm.font("RobotoMono Nerd Font")
+config.font = wezterm.font("JetBrainsMono Nerd Font Mono")
 config.font_size = 14
 
 -- Finally, return the configuration to wezterm:
