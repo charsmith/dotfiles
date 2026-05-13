@@ -10,6 +10,9 @@ export HISTSIZE=100000
 export HISTFILESIZE=100000
 export HISTTIMEFORMAT="%F %T "
 
+# Claude is silly
+export CLAUDE_CODE_TMUX_TRUECOLOR=1
+
 # Shell options
 shopt -s checkwinsize
 shopt -s cdspell
@@ -19,6 +22,8 @@ set -o vi
 # Environment variables
 export GDK_NATIVE_WINDOWS=1
 if command -v nvim >/dev/null 2>&1; then
+  export EDITOR='nvim'
+  export VISUAL='nvim'
   export MANPAGER='nvim +Man!'
 else
   export MANPAGER='less -Xq'
@@ -45,6 +50,13 @@ setup_terminal_colors() {
   fi
   if [[ -z $SCREEN_COLORS ]]; then
     export TERM=$TMP_TERM
+  fi
+  # Declare truecolor support for terminals that don't set COLORTERM themselves
+  if [[ -z $COLORTERM ]]; then
+    # WezTerm sets TERM_PROGRAM; Windows Terminal sets WT_SESSION
+    if [[ $TERM_PROGRAM == "WezTerm" || -n $WT_SESSION ]]; then
+      export COLORTERM=truecolor
+    fi
   fi
 }
 setup_terminal_colors
@@ -86,7 +98,7 @@ source_locals() {
   local os
   case "$(uname)" in
     Darwin) os=macos ;;
-    Linux)  os=linux ;;
+    Linux) os=linux ;;
     *) return ;;
   esac
   source_if_exists "$SCRIPT_DIR/locals/$os.sh"
