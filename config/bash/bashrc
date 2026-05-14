@@ -99,6 +99,7 @@ source_locals() {
   case "$(uname)" in
     Darwin) os=macos ;;
     Linux) os=linux ;;
+    MINGW*|MSYS*|CYGWIN*) os=windows ;;
     *) return ;;
   esac
   source_if_exists "$SCRIPT_DIR/locals/$os.sh"

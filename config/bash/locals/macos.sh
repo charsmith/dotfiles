@@ -11,3 +11,6 @@ set_secret_env() {
   fi
 }
 set_secret_env SLACK_TOKEN
+
+# WezTerm CLI (lives inside the macOS app bundle)
+[[ -d "/Applications/WezTerm.app/Contents/MacOS" ]] && export PATH="/Applications/WezTerm.app/Contents/MacOS:$PATH"
