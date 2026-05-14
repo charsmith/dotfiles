@@ -53,6 +53,41 @@ _imgcat_drain() {
 }
 [[ "$PROMPT_COMMAND" == *_imgcat_drain* ]] || PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND; }_imgcat_drain"
 
+# Install Claude Code skills from a GitHub Enterprise blob URL.
+# Usage: aitc skill add https://github.netflix.net/owner/repo/blob/branch/path/SKILL.md
+aitc() {
+  if [[ "$1 $2" != "skill add" ]]; then
+    echo "usage: aitc skill add <github-blob-url>" >&2; return 1
+  fi
+  local url="$3"
+  [[ -n "$url" ]] || { echo "usage: aitc skill add <github-blob-url>" >&2; return 1; }
+
+  # Parse: https://<hostname>/<owner>/<repo>/blob/<branch>/<path>
+  local hostname owner repo path
+  hostname=$(awk -F/ '{print $3}' <<< "$url")
+  owner=$(awk   -F/ '{print $4}' <<< "$url")
+  repo=$(awk    -F/ '{print $5}' <<< "$url")
+  path=$(awk    -F/ '{for(i=8;i<=NF;i++) printf "%s%s",$i,(i<NF?"/":""); print ""}' <<< "$url")
+
+  [[ -n "$hostname" && -n "$owner" && -n "$repo" && -n "$path" ]] || {
+    echo "aitc: couldn't parse URL '$url'" >&2; return 1
+  }
+
+  local content
+  content=$(gh api --hostname "$hostname" "/repos/$owner/$repo/contents/$path" \
+    --jq '.content' 2>/dev/null | base64 -d)
+  [[ -n "$content" ]] || { echo "aitc: failed to fetch $url" >&2; return 1; }
+
+  local name
+  name=$(awk '/^name:/{print $2; exit}' <<< "$content")
+  [[ -n "$name" ]] || { echo "aitc: no 'name:' found in skill frontmatter" >&2; return 1; }
+
+  local dest="$HOME/.claude/skills/$name"
+  mkdir -p "$dest"
+  printf '%s\n' "$content" > "$dest/SKILL.md"
+  echo "aitc: installed '$name' → $dest/SKILL.md"
+}
+
 # Open the current git repo on GitHub/GHE in the browser.
 gho() {
   local remote
