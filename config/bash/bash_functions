@@ -35,6 +35,24 @@ notify() {
   fi
 }
 
+# wezterm imgcat sends DA/size terminal queries to detect capabilities.
+# In tmux the responses (?1;2;4c, 6;NNt) land in the tty input buffer and
+# appear at the prompt as if typed. We drain them in PROMPT_COMMAND instead
+# of inline — by the time PROMPT_COMMAND runs the responses have already
+# arrived, so the read is instant and never races with real user input.
+_IMGCAT_PENDING_DRAIN=0
+imgcat() {
+  wezterm imgcat "$@"
+  [[ -n "$TMUX" ]] && _IMGCAT_PENDING_DRAIN=1
+}
+_imgcat_drain() {
+  [[ $_IMGCAT_PENDING_DRAIN -eq 1 ]] || return
+  _IMGCAT_PENDING_DRAIN=0
+  local _
+  IFS= read -t 0.1 -rs -n 64 _ </dev/tty 2>/dev/null || true
+}
+[[ "$PROMPT_COMMAND" == *_imgcat_drain* ]] || PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND; }_imgcat_drain"
+
 # Open the current git repo on GitHub/GHE in the browser.
 gho() {
   local remote
