@@ -1,4 +1,11 @@
-export PATH="/opt/nvim-linux64/bin:$PATH"
+# Neovim: asset/dir name is arch-specific since v0.10.4
+case "$(uname -m)" in
+  x86_64)  _nvim_dir="/opt/nvim-linux-x86_64" ;;
+  aarch64) _nvim_dir="/opt/nvim-linux-arm64"  ;;
+  *)       _nvim_dir="/opt/nvim-linux64"       ;; # legacy fallback
+esac
+[[ -d "$_nvim_dir/bin" ]] && export PATH="$_nvim_dir/bin:$PATH"
+unset _nvim_dir
 
 # WezTerm CLI — only add if not already on PATH
 if ! command -v wezterm &>/dev/null; then

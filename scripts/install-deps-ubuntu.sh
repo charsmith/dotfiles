@@ -3,7 +3,7 @@
 #
 # Strategy:
 # - apt for system packages and pyenv build deps
-# - GitHub release tarballs for neovim (matches /opt/nvim-linux64 expected by
+# - GitHub release tarballs for neovim (matches /opt/nvim-linux-<arch> expected by
 #   config/bash/locals/linux)
 # - Official installer scripts for starship, zoxide, pyenv, nvm
 # - wezterm is skipped here — install separately if you use it on Linux
@@ -67,17 +67,25 @@ if ! command -v eza &>/dev/null; then
   rm -rf "$tmp"
 fi
 
-# neovim: install to /opt/nvim-linux64 (matches config/bash/locals/linux PATH)
-if [[ ! -x /opt/nvim-linux64/bin/nvim ]]; then
-  echo "Installing neovim ($NVIM_VERSION)..."
+# neovim: install to /opt/nvim-linux-<arch> (matches config/bash/locals/linux PATH)
+# Asset naming changed in v0.10.4: nvim-linux64 → nvim-linux-x86_64 / nvim-linux-arm64
+case "$(uname -m)" in
+  x86_64)  _nvim_arch="x86_64" ;;
+  aarch64) _nvim_arch="arm64"  ;;
+  *) echo "Unsupported arch for neovim install: $(uname -m)"; exit 1 ;;
+esac
+_nvim_dir="/opt/nvim-linux-${_nvim_arch}"
+if [[ ! -x "${_nvim_dir}/bin/nvim" ]]; then
+  echo "Installing neovim ($NVIM_VERSION) for ${_nvim_arch}..."
   tmp="$(mktemp -d)"
-  curl -fsSL "https://github.com/neovim/neovim/releases/download/${NVIM_VERSION}/nvim-linux64.tar.gz" -o "$tmp/nvim.tar.gz"
-  sudo rm -rf /opt/nvim-linux64
+  curl -fsSL "https://github.com/neovim/neovim/releases/download/${NVIM_VERSION}/nvim-linux-${_nvim_arch}.tar.gz" -o "$tmp/nvim.tar.gz"
+  sudo rm -rf "${_nvim_dir}"
   sudo tar -C /opt -xzf "$tmp/nvim.tar.gz"
   rm -rf "$tmp"
 else
-  echo "neovim already installed at /opt/nvim-linux64, skipping."
+  echo "neovim already installed at ${_nvim_dir}, skipping."
 fi
+unset _nvim_arch _nvim_dir
 
 # starship
 if ! command -v starship &>/dev/null; then
