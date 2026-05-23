@@ -93,7 +93,10 @@ gho() {
   local remote
   remote="$(git remote get-url origin 2>/dev/null)" || { echo "gho: not a git repo or no origin" >&2; return 1; }
   remote="${remote%.git}"
-  remote="${remote/git@/https://}"
-  remote="${remote/com:/com/}"
-  command -v open >/dev/null 2>&1 && open "$remote" || xdg-open "$remote"
+  # Convert SSH remote (any host) to HTTPS: git@host:owner/repo → https://host/owner/repo
+  if [[ "$remote" == git@* ]]; then
+    remote="${remote#git@}"
+    remote="https://${remote/://}"
+  fi
+  if command -v open >/dev/null 2>&1; then open "$remote"; else xdg-open "$remote"; fi
 }
