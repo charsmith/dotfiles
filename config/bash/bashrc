@@ -111,11 +111,6 @@ export NVM_DIR="$HOME/.nvm"
 source_if_exists "$NVM_DIR/nvm.sh"
 source_if_exists "$NVM_DIR/bash_completion"
 
-# Initialize zoxide if available (the `cd` -> `z` alias lives in bash_aliases)
-if command -v zoxide &>/dev/null; then
-  eval "$(zoxide init bash)"
-fi
-
 # direnv: per-directory env. Loads .envrc on cd into an allowed dir.
 if command -v direnv &>/dev/null; then
   eval "$(direnv hook bash)"
@@ -133,6 +128,15 @@ if command -v fzf &>/dev/null; then
   if command -v bat &>/dev/null; then
     export FZF_CTRL_T_OPTS="--preview 'bat --style=numbers --color=always --line-range :200 {}'"
   fi
+fi
+
+# Initialize zoxide as `cd` AFTER fzf so its completion wins.
+# --cmd cd defines the `cd` function and wires __zoxide_z_complete,
+# which fzf --bash would otherwise overwrite with _fzf_dir_completion.
+if command -v zoxide &>/dev/null; then
+  eval "$(zoxide init bash --cmd cd)"
+  # Override single-argument completion to also include zoxide frecency results,
+  # not just local directories. Multi-word + trailing space still uses interactive fzf.
 fi
 
 source_if_exists ~/.local/bin/env
