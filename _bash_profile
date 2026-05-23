@@ -1,0 +1,3 @@
+# Login shells source ~/.bash_profile instead of ~/.bashrc.
+# Delegate to ~/.bashrc so both shell types get the same config.
+[[ -f ~/.bashrc ]] && source ~/.bashrc
