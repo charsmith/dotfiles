@@ -88,6 +88,41 @@ aitc() {
   echo "aitc: installed '$name' → $dest/SKILL.md"
 }
 
+# Ensure the Claude Code status line is wired into ~/.claude/settings.json.
+# Safe to re-run; no-ops if already configured.
+install_claude_statusline() {
+  local settings="$HOME/.claude/settings.json"
+  local script="$HOME/.config/claude/statusline-command.sh"
+
+  if [[ ! -f "$script" ]]; then
+    echo "install_claude_statusline: script not found at $script" >&2
+    echo "  Run: bash ~/.dotfiles/scripts/install-symlinks.sh" >&2
+    return 1
+  fi
+
+  if [[ ! -f "$settings" ]]; then
+    mkdir -p "$(dirname "$settings")"
+    echo '{}' > "$settings"
+  fi
+
+  if python3 -c "import json,sys; d=json.load(open('$settings')); sys.exit(0 if 'statusLine' in d else 1)" 2>/dev/null; then
+    echo "install_claude_statusline: already configured in $settings"
+    return 0
+  fi
+
+  python3 - "$settings" <<'EOF'
+import json, sys
+path = sys.argv[1]
+with open(path) as f:
+    d = json.load(f)
+d["statusLine"] = {"type": "command", "command": "bash ~/.config/claude/statusline-command.sh"}
+with open(path, "w") as f:
+    json.dump(d, f, indent=2)
+    f.write("\n")
+EOF
+  echo "install_claude_statusline: configured status line in $settings"
+}
+
 # Open the current git repo on GitHub/GHE in the browser.
 gho() {
   local remote
