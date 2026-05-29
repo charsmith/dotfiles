@@ -97,9 +97,18 @@ owned=$(cat <<'EOF'
 EOF
 )
 
-# Deep-merge: existing wins on scalar conflicts, our keys set where absent or override
-# For hooks.SessionStart we own the whole array, so * replaces it cleanly.
-merged="$(echo "$existing" | jq --argjson owned "$owned" '. * $owned')"
+# Merge statusLine (safe scalar replace) and append each hook entry only if
+# our exact command isn't already present (idempotent, preserves user hooks).
+merged="$(echo "$existing" | jq --argjson owned "$owned" '
+  .statusLine = $owned.statusLine |
+  reduce ($owned.hooks | to_entries[]) as $e (
+    .;
+    if (.hooks[$e.key] // [] | map(.hooks[].command) | index($e.value[0].hooks[0].command)) != null
+    then .
+    else .hooks[$e.key] = ((.hooks[$e.key] // []) + $e.value)
+    end
+  )
+')"
 
 # Write atomically
 tmp="$(mktemp)"
