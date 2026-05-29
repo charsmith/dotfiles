@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Merge dotfiles-managed Claude Code settings into ~/.claude/settings.json.
 # Idempotent — safe to re-run. Only touches keys this dotfiles repo owns:
-#   statusLine, hooks.SessionStart
+#   statusLine, hooks.SessionStart, hooks.PreToolUse, hooks.PostToolUse,
+#   hooks.Stop, hooks.UserPromptSubmit, hooks.SessionEnd
 # All other keys (apiKeyHelper, env, etc.) are left untouched.
 
 set -euo pipefail
@@ -31,6 +32,56 @@ owned=$(cat <<'EOF'
     "command": "bash ~/.config/claude/statusline-command.sh"
   },
   "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.config/claude/tmux-claude-state.sh watch"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.config/claude/tmux-claude-state.sh running"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.config/claude/tmux-claude-state.sh inactive"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.config/claude/tmux-claude-state.sh running"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.config/claude/tmux-claude-state.sh inactive"
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "hooks": [
