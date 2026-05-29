@@ -2,7 +2,7 @@
 # Merge dotfiles-managed Claude Code settings into ~/.claude/settings.json.
 # Idempotent — safe to re-run. Only touches keys this dotfiles repo owns:
 #   statusLine, hooks.SessionStart, hooks.PreToolUse, hooks.PostToolUse,
-#   hooks.Stop, hooks.UserPromptSubmit, hooks.SessionEnd
+#   hooks.Notification, hooks.Stop, hooks.UserPromptSubmit, hooks.SessionEnd
 # All other keys (apiKeyHelper, env, etc.) are left untouched.
 
 set -euo pipefail
@@ -37,7 +37,7 @@ owned=$(cat <<'EOF'
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/.config/claude/tmux-claude-state.sh watch"
+            "command": "bash ~/.config/claude/tmux-claude-state.sh running"
           }
         ]
       }
@@ -48,6 +48,16 @@ owned=$(cat <<'EOF'
           {
             "type": "command",
             "command": "bash ~/.config/claude/tmux-claude-state.sh running"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.config/claude/tmux-claude-state.sh waiting"
           }
         ]
       }
