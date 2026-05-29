@@ -87,6 +87,19 @@ After editing a config, apply changes without restarting:
 sleep 10 && notify "Build done"
 ```
 
+## Claude Hook Wiring (`config/claude/`)
+
+`tmux-claude-state.sh` drives the tmux window pill color based on Claude's state. Hook event notes learned from testing:
+
+- `Notification` fires for the "task complete" OS notification — **not** for permission prompts. Do not use it for the waiting/red state.
+- `PermissionRequest` fires specifically when Claude needs tool approval — use this for waiting (red).
+- `Stop` fires reliably when Claude finishes a turn — use for inactive (gray).
+- `PreToolUse` / `PostToolUse` fire around every tool call — use for running (green).
+
+When iterating on hook behavior, **test live before committing** — hook event semantics are easy to get wrong and each wrong guess produces a noisy tweak commit.
+
+**Never commit or push changes in this repo until the user explicitly says they are satisfied.**
+
 ## Commit Scopes
 
 Use these scopes consistently when committing changes to this repo:
