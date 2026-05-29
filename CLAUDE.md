@@ -32,6 +32,7 @@ bash ~/.dotfiles/scripts/install-deps-macos.sh    # or install-deps-ubuntu.sh
 | `scripts/install-deps-macos.sh` | Homebrew + nvm (via official installer). |
 | `scripts/install-deps-ubuntu.sh` | apt for system pkgs + pyenv build deps; GitHub release tarball for neovim (to `/opt/nvim-linux64`); official installers for starship, zoxide, pyenv, nvm. |
 | `scripts/install-symlinks.sh` | Symlinks only — no package installs. Uses `TARGET_HOME` env var (defaults to `$HOME`) so it can be dry-tested. |
+| `scripts/install-claude.sh` | Merges dotfiles-managed keys (`statusLine`, `hooks`) into `~/.claude/settings.json`. Idempotent; skips silently if Claude Code or `jq` is absent. |
 
 ## Symlink Conventions
 

@@ -49,5 +49,6 @@ case "$OS" in
 esac
 
 bash "$DOTFILES_DIR/scripts/install-symlinks.sh"
+bash "$DOTFILES_DIR/scripts/install-claude.sh"
 
 echo "Bootstrap complete."
