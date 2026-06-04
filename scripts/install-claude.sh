@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Merge dotfiles-managed Claude Code settings into ~/.claude/settings.json.
 # Idempotent — safe to re-run. Only touches keys this dotfiles repo owns:
-#   statusLine, hooks.SessionStart, hooks.PreToolUse, hooks.PostToolUse,
+#   statusLine, theme, hooks.SessionStart, hooks.PreToolUse, hooks.PostToolUse,
 #   hooks.PermissionRequest, hooks.Stop, hooks.UserPromptSubmit, hooks.SessionEnd
 # All other keys (apiKeyHelper, env, etc.) are left untouched.
 
@@ -27,6 +27,7 @@ fi
 
 owned=$(cat <<'EOF'
 {
+  "theme": "dark",
   "statusLine": {
     "type": "command",
     "command": "bash ~/.config/claude/statusline-command.sh"
@@ -110,6 +111,7 @@ EOF
 # Merge statusLine (safe scalar replace) and append each hook entry only if
 # our exact command isn't already present (idempotent, preserves user hooks).
 merged="$(echo "$existing" | jq --argjson owned "$owned" '
+  .theme = $owned.theme |
   .statusLine = $owned.statusLine |
   reduce ($owned.hooks | to_entries[]) as $e (
     .;
