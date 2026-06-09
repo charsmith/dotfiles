@@ -61,6 +61,7 @@ bash ~/.dotfiles/scripts/install-deps-macos.sh    # or install-deps-ubuntu.sh
 | `config/claude/tmux-window-name.sh` | Renames the tmux window to the Claude session's working directory basename (fired by `SessionStart` hook) |
 | `config/pi/extensions/catppuccin-footer.ts` | Pi footer extension — same catppuccin mocha pill style as the Claude status line |
 | `config/pi/extensions/tmux-window-name.ts` | Pi extension — renames tmux window to basename of the working directory on session start |
+| `config/pi/extensions/tmux-pi-state.ts` | Pi extension — drives tmux window pill green while pi is running, reverts to gray on idle/shutdown |
 | `_bash_profile` | `~/.bash_profile` — delegates to `~/.bashrc` for login shells |
 | `_bashrc` | `~/.bashrc` entry point — sources `~/.config/bash/bashrc` |
 | `_inputrc` | Readline config |
