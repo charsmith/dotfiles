@@ -1,38 +1,64 @@
 #!/usr/bin/env bash
-# Outputs a Nerd Font icon + trailing space when nvim or claude is running in
+# Outputs an icon + trailing space when nvim, claude, or pi is running in
 # the pane, otherwise empty string. Uses ps-based tree walk because pgrep -P
 # is unreliable on macOS.
 pane_pid=$1
 current_cmd=$2
 
 if [ "$current_cmd" = "nvim" ]; then
-  printf '\xee\uf27d\xb6 ' # U+E736 vim logo
+  printf '\xee\x9c\xb6 ' # U+E736 vim logo (nf-dev-vim)
   exit 0
 fi
 
-# Walk process tree: collect all pids whose ancestor chain includes pane_pid,
-# then check if any of their args contain the claude binary path.
-ps_snapshot=$(ps -ax -o pid=,ppid=,args= 2>/dev/null)
+# Snapshot: pid ppid comm args (comm is the short executable name)
+ps_snapshot=$(ps -ax -o pid=,ppid=,comm=,args= 2>/dev/null)
 
 get_children() {
   local parent=$1
   echo "$ps_snapshot" | awk -v ppid="$parent" '$2==ppid {print $1}'
 }
 
+# Walk process tree rooted at $1; return 0 if any node matches predicate $2
+# Predicate is a grep pattern matched against the full ps line for each pid.
 check_tree() {
   local pid=$1
-  local args
-  args=$(echo "$ps_snapshot" | awk -v p="$pid" '$1==p {$1=$2=""; print}')
-  if echo "$args" | grep -q "claude/versions"; then
+  local pattern=$2
+  local line
+  line=$(echo "$ps_snapshot" | awk -v p="$pid" '$1==p')
+  if echo "$line" | grep -q "$pattern"; then
     return 0
   fi
   local child
   for child in $(get_children "$pid"); do
-    check_tree "$child" && return 0
+    check_tree "$child" "$pattern" && return 0
   done
   return 1
 }
 
-if check_tree "$pane_pid"; then
-  printf '\xef\uee0d\x84 ' # U+F544 robot icon
+# Claude: look for "claude/versions" anywhere in the args subtree
+if check_tree "$pane_pid" "claude/versions"; then
+  printf '\xef\x95\x84 ' # U+F544 robot icon (nf-mdi-robot)
+  exit 0
+fi
+
+# Pi coding agent: look for comm == "pi" anywhere in the subtree.
+# The pi binary is a Node shebang so tmux sees "node" as current_cmd,
+# but ps shows comm="pi" for the pi process itself.
+check_pi_tree() {
+  local pid=$1
+  local line comm
+  line=$(echo "$ps_snapshot" | awk -v p="$pid" '$1==p')
+  comm=$(echo "$line" | awk '{print $3}')
+  if [ "$comm" = "pi" ]; then
+    return 0
+  fi
+  local child
+  for child in $(get_children "$pid"); do
+    check_pi_tree "$child" && return 0
+  done
+  return 1
+}
+
+if check_pi_tree "$pane_pid"; then
+  printf '\xcf\x80 ' # π U+03C0
 fi
