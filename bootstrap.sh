@@ -28,6 +28,27 @@ detect_os() {
 
 OS="$(detect_os)"
 
+# Ensure git is available before attempting to clone
+if ! command -v git &>/dev/null; then
+  echo "git not found — installing..."
+  case "$OS" in
+    macos)
+      # Triggers Xcode Command Line Tools install, which includes git
+      xcode-select --install 2>/dev/null || true
+      echo "Follow the Xcode CLT prompt, then re-run bootstrap.sh"
+      exit 1
+      ;;
+    ubuntu)
+      sudo apt-get update -y
+      sudo apt-get install -y git
+      ;;
+    *)
+      echo "Cannot install git on unsupported OS. Install it manually and re-run."
+      exit 1
+      ;;
+  esac
+fi
+
 # Clone dotfiles first so we can run scripts from the repo
 if [[ ! -d "$DOTFILES_DIR" ]]; then
   echo "Cloning dotfiles to $DOTFILES_DIR..."
