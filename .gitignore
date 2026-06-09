@@ -5,3 +5,5 @@ config/tmux/plugins
 .pi/
 # Machine-local shell overrides (never committed)
 config/bash/locals/*.local.sh
+# Pi models config contains machine-specific proxy URLs
+config/pi/models.json

@@ -1,7 +1,0 @@
-{
-  "providers": {
-    "anthropic": {
-      "baseUrl": "$ANTHROPIC_BASE_URL"
-    }
-  }
-}
