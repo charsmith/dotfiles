@@ -1,4 +1,5 @@
 _gitconfig
 config/tmux/plugins
 *.bak
+*.v0.json
 .pi/
