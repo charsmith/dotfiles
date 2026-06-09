@@ -6,6 +6,9 @@ input=$(cat)
 raw_dir=$(echo "$input" | jq -r '.workspace.current_dir // .cwd // ""')
 model=$(echo "$input" | jq -r '.model.display_name // ""')
 used_pct=$(echo "$input" | jq -r '.context_window.used_percentage // empty')
+cost=$(echo "$input" | jq -r '.cost.total_cost_usd // empty')
+tokens_in=$(echo "$input" | jq -r '.context_window.total_input_tokens // empty')
+tokens_out=$(echo "$input" | jq -r '.context_window.total_output_tokens // empty')
 
 # Path: replicate starship behavior — strip home prefix then prepend …/ (matches observed output)
 ellipsis=$(printf '\xe2\x80\xa6')
@@ -34,9 +37,21 @@ _peach="250;179;135"
 _green="166;227;161"
 _teal="148;226;213"
 _blue="137;180;250"
+_yellow="249;226;175"
 _text="205;214;244"
 _mantle="24;24;37"
 _base="30;30;46"
+
+fmt_tokens() {
+  local n=$1
+  if (( n >= 1000 )); then
+    local k=$(( n / 1000 ))
+    local r=$(( (n % 1000) / 100 ))
+    (( r > 0 )) && printf '%d.%dk' "$k" "$r" || printf '%dk' "$k"
+  else
+    printf '%d' "$n"
+  fi
+}
 
 # ANSI helpers — combined codes, no resets mid-render (matches starship exactly)
 fg()    { printf '\033[38;2;%sm' "$1"; }
@@ -86,6 +101,18 @@ if [ -n "$used_pct" ]; then
   out+="$(fg_bg $_blue $prev_color)${arrow}"
   out+="$(fg $_base) ctx:$(printf '%.0f' "$used_pct")% "
   prev_color="$_blue"
+fi
+
+# Transition → yellow for cost + token breakdown
+if [ -n "$cost" ] && awk -v c="$cost" 'BEGIN{exit (c <= 0)}' 2>/dev/null; then
+  cost_fmt=$(printf '$%.3f' "$cost")
+  tok_fmt=""
+  if [ -n "$tokens_in" ] && [ -n "$tokens_out" ]; then
+    tok_fmt=" $(fmt_tokens "$tokens_in")/$(fmt_tokens "$tokens_out")"
+  fi
+  out+="$(fg_bg $_yellow $prev_color)${arrow}"
+  out+="$(fg $_base) ${cost_fmt}${tok_fmt} "
+  prev_color="$_yellow"
 fi
 
 # Closing arrow back to terminal bg: fg:last_color, no bg
