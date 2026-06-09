@@ -1,0 +1,20 @@
+{
+  "$schema": "https://unpkg.com/@aliou/pi-guardrails@0.13.2/schema.json",
+  "onboarding": {
+    "completed": true,
+    "completedAt": "2026-06-09T16:57:48.629Z"
+  },
+  "features": {
+    "pathAccess": true
+  },
+  "pathAccess": {
+    "allowedPaths": [
+      "~/code/",
+      "~/.dotfiles/",
+      "~/.config/",
+      "/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/examples/",
+      "/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/"
+    ]
+  },
+  "version": "0.9.0-20260327"
+}
