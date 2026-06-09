@@ -15,7 +15,6 @@ APT_PACKAGES=(
   ca-certificates
   curl
   git
-  gh
   tmux
   unzip
   bash-completion
@@ -42,9 +41,19 @@ APT_PACKAGES=(
 NVIM_VERSION="${NVIM_VERSION:-stable}"
 NVM_VERSION="${NVM_VERSION:-v0.39.7}"
 
+# gh CLI is not in the default Ubuntu apt sources — add GitHub's repo first.
+if ! command -v gh &>/dev/null; then
+  echo "Adding GitHub CLI apt repository..."
+  curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+    | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+  sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+    | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+fi
+
 echo "Updating apt..."
 sudo apt-get update -y
-sudo apt-get install -y "${APT_PACKAGES[@]}"
+sudo apt-get install -y "${APT_PACKAGES[@]}" gh
 
 # Ubuntu ships bat as `batcat` and fd-find as `fdfind` to avoid name clashes.
 # The bashrc and fzf integration expect `bat` and `fd`, so shim them into
@@ -60,11 +69,19 @@ fi
 # eza isn't in default apt; pull from its GitHub release.
 if ! command -v eza &>/dev/null; then
   echo "Installing eza..."
-  tmp="$(mktemp -d)"
-  curl -fsSL "https://github.com/eza-community/eza/releases/latest/download/eza_x86_64-unknown-linux-gnu.tar.gz" -o "$tmp/eza.tar.gz"
-  tar -C "$tmp" -xzf "$tmp/eza.tar.gz"
-  install -m 0755 "$tmp/eza" "$HOME/.local/bin/eza"
-  rm -rf "$tmp"
+  case "$(uname -m)" in
+    x86_64)  _eza_arch="x86_64" ;;
+    aarch64) _eza_arch="aarch64" ;;
+    *) echo "Unsupported arch for eza: $(uname -m), skipping." >&2; _eza_arch="" ;;
+  esac
+  if [[ -n "$_eza_arch" ]]; then
+    tmp="$(mktemp -d)"
+    curl -fsSL "https://github.com/eza-community/eza/releases/latest/download/eza_${_eza_arch}-unknown-linux-gnu.tar.gz" -o "$tmp/eza.tar.gz"
+    tar -C "$tmp" -xzf "$tmp/eza.tar.gz"
+    install -m 0755 "$tmp/eza" "$HOME/.local/bin/eza"
+    rm -rf "$tmp"
+  fi
+  unset _eza_arch
 fi
 
 # neovim: install to /opt/nvim-linux-<arch> (matches config/bash/locals/linux PATH)
@@ -122,10 +139,18 @@ fi
 # tree-sitter CLI: required by nvim-treesitter (main branch) to compile parsers.
 if ! command -v tree-sitter &>/dev/null; then
   echo "Installing tree-sitter CLI..."
-  mkdir -p "$HOME/.local/bin"
-  curl -fsSL "https://github.com/tree-sitter/tree-sitter/releases/latest/download/tree-sitter-linux-x64.gz" \
-    | gunzip > "$HOME/.local/bin/tree-sitter"
-  chmod +x "$HOME/.local/bin/tree-sitter"
+  case "$(uname -m)" in
+    x86_64)  _ts_arch="x64" ;;
+    aarch64) _ts_arch="arm64" ;;
+    *) echo "Unsupported arch for tree-sitter: $(uname -m), skipping." >&2; _ts_arch="" ;;
+  esac
+  if [[ -n "$_ts_arch" ]]; then
+    mkdir -p "$HOME/.local/bin"
+    curl -fsSL "https://github.com/tree-sitter/tree-sitter/releases/latest/download/tree-sitter-linux-${_ts_arch}.gz" \
+      | gunzip > "$HOME/.local/bin/tree-sitter"
+    chmod +x "$HOME/.local/bin/tree-sitter"
+  fi
+  unset _ts_arch
 else
   echo "tree-sitter already installed, skipping."
 fi

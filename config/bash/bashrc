@@ -64,15 +64,16 @@ setup_terminal_colors() {
 }
 setup_terminal_colors
 
-# Starship prompt
-eval "$(starship init bash)"
-
-# Homebrew (Apple Silicon vs Intel)
+# Homebrew (Apple Silicon vs Intel) — must come before starship so the brew
+# bin dir is on PATH when starship init runs.
 if [[ -x /opt/homebrew/bin/brew ]]; then
   eval "$(/opt/homebrew/bin/brew shellenv)"
 elif [[ -x /usr/local/bin/brew ]]; then
   eval "$(/usr/local/bin/brew shellenv)"
 fi
+
+# Starship prompt
+eval "$(starship init bash)"
 
 # Less settings
 [[ -x /usr/bin/lesspipe ]] && eval "$(lesspipe)"
