@@ -106,6 +106,8 @@ source_locals() {
     *) return ;;
   esac
   source_if_exists "$SCRIPT_DIR/locals/$os.sh"
+  # Machine-local overrides (gitignored, never committed)
+  source_if_exists "$SCRIPT_DIR/locals/$os.local.sh"
 }
 source_locals
 

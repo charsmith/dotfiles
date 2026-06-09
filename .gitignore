@@ -3,3 +3,5 @@ config/tmux/plugins
 *.bak
 *.v0.json
 .pi/
+# Machine-local shell overrides (never committed)
+config/bash/locals/*.local.sh
