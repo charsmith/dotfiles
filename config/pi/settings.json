@@ -1,0 +1,9 @@
+{
+  "lastChangelogVersion": "0.79.0",
+  "defaultProvider": "anthropic",
+  "defaultModel": "claude-sonnet-4-6",
+  "defaultThinkingLevel": "medium",
+  "packages": [
+    "npm:@aliou/pi-guardrails"
+  ]
+}

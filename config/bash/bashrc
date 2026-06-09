@@ -13,6 +13,9 @@ export HISTTIMEFORMAT="%F %T "
 # Claude is silly
 export CLAUDE_CODE_TMUX_TRUECOLOR=1
 
+# Pi coding agent: redirect config to ~/.config/pi (managed by dotfiles)
+export PI_CODING_AGENT_DIR="$HOME/.config/pi"
+
 # Shell options
 shopt -s checkwinsize
 shopt -s cdspell

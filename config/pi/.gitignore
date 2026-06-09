@@ -1,0 +1,6 @@
+# Pi runtime state — not tracked in dotfiles
+auth.json
+trust.json
+sessions/
+npm/
+git/
