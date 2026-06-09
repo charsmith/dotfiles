@@ -17,12 +17,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 2. Point pi at the dotfiles-managed config dir
-# ---------------------------------------------------------------------------
-export PI_CODING_AGENT_DIR="$HOME/.config/pi"
-
-# ---------------------------------------------------------------------------
-# 3. Install packages listed here
+# 2. Install packages listed here
 # ---------------------------------------------------------------------------
 packages=(
   npm:@aliou/pi-guardrails
