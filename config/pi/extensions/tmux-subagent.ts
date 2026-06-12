@@ -30,8 +30,12 @@
  *   │ truncated task text…                                 │
  *   └──────────────────────────────────────────────────────┘
  *
- * Tools:   launch_agent, agent_reply
+ * Tools:   launch_agent (task, mode, model, agent), agent_reply
  * Commands: /agents, /agents-clear
+ *
+ * Agent definitions live in ~/.config/pi/agents/<name>.md — YAML frontmatter
+ * (name, description, tools) + system prompt body. Pass agent=<name> to
+ * launch_agent to apply that agent's system prompt and tool list.
  *
  * See tmux-subagent.md (next to this file) for the full architecture: the
  * file-based IPC, the stop/approval flow, window tracking, and the gotchas.
@@ -42,6 +46,44 @@ import { existsSync, readFileSync, unlinkSync, watch, writeFileSync } from "node
 import type { FSWatcher } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+
+// ─── Agent definition loader ────────────────────────────────────────────────
+
+interface AgentDef {
+  name: string;
+  description: string;
+  tools: string;
+  systemPrompt: string;
+}
+
+function loadAgentDef(agentName: string): AgentDef | null {
+  const searchDirs = [
+    path.join(os.homedir(), ".config", "pi", "agents"),
+    path.join(os.homedir(), ".pi", "agents"),
+  ];
+  for (const dir of searchDirs) {
+    const filePath = path.join(dir, `${agentName}.md`);
+    if (!existsSync(filePath)) continue;
+    try {
+      const raw = readFileSync(filePath, "utf-8");
+      const match = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+      if (!match) continue;
+      const frontmatter: Record<string, string> = {};
+      for (const line of match[1].split("\n")) {
+        const idx = line.indexOf(":");
+        if (idx > 0) frontmatter[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+      }
+      if (!frontmatter.name) continue;
+      return {
+        name: frontmatter.name,
+        description: frontmatter.description || "",
+        tools: frontmatter.tools || "",
+        systemPrompt: match[2].trim(),
+      };
+    } catch { continue; }
+  }
+  return null;
+}
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
@@ -628,9 +670,10 @@ export default function (pi: ExtensionAPI) {
       "In either mode, if the agent needs input (a guardrails permission prompt",
       "or an interactive question) it pauses and you respond by switching to its",
       "tmux window. For plain follow-up instructions to a running/stopped",
-      "background agent you can also use agent_reply.",
-      "NOTE: this tool is only available to the top-level session.",
-      "Subagents cannot launch further agents.",
+      "background agent you can also use agent_reply. NOTE: this tool is only",
+      "available to the top-level session. Subagents cannot launch further agents.",
+      "agent (optional): name of an agent definition from ~/.config/pi/agents/<name>.md",
+      "— applies that agent's system prompt and tool restrictions to the session.",
     ].join(" "),
     promptSnippet: "Launch a subagent in a tmux window (blocking or background)",
     parameters: Type.Object({
@@ -650,6 +693,11 @@ export default function (pi: ExtensionAPI) {
         description:
           "Model to use for the agent. Defaults to the current session model. " +
           "Do not specify unless explicitly asked by the user.",
+      })),
+      agent: Type.Optional(Type.String({
+        description:
+          "Agent definition name to load from ~/.config/pi/agents/<name>.md. " +
+          "Applies the agent's system prompt and tool restrictions to the subagent session.",
       })),
     }),
 
@@ -816,7 +864,32 @@ export default function (pi: ExtensionAPI) {
 }
 `.trimStart();
 
-      writeFileSync(tmpExtPath, tmpExtSource, { mode: 0o600 });
+      // ── Agent definition: inject system prompt into child extension ───
+      let agentDef: AgentDef | null = null;
+      let finalExtSource = tmpExtSource;
+      if (params.agent) {
+        agentDef = loadAgentDef(params.agent);
+        if (!agentDef) {
+          return {
+            content: [{ type: "text", text: `Agent definition "${params.agent}" not found in ~/.config/pi/agents/ or ~/.pi/agents/` }],
+            details: {}, isError: true,
+          };
+        }
+        // Append a before_agent_start hook that injects the agent's system prompt.
+        // Splice it in just before the final closing brace of the export default function.
+        const sysPrompt = agentDef.systemPrompt;
+        const hookCode = `
+  pi.on("before_agent_start", async (_event, _ctx) => {
+    return { systemPrompt: ${JSON.stringify(sysPrompt)} };
+  });
+`;
+        const lastBrace = finalExtSource.lastIndexOf("\n}");
+        if (lastBrace !== -1) {
+          finalExtSource = finalExtSource.slice(0, lastBrace) + hookCode + "\n}";
+        }
+      }
+
+      writeFileSync(tmpExtPath, finalExtSource, { mode: 0o600 });
       // Pre-create state file so fs.watch has a target before the child writes.
       writeFileSync(stateFile, JSON.stringify({ status: "running" }), "utf-8");
 
@@ -859,12 +932,16 @@ export default function (pi: ExtensionAPI) {
         if (agentProvider) modelArgs.push("--provider", agentProvider);
         if (agentModelId)  modelArgs.push("--model",    agentModelId);
 
+        // Pass tool restrictions from the agent definition
+        const toolArgs: string[] = [];
+        if (agentDef?.tools) toolArgs.push("--tools", agentDef.tools);
+
         const raw = execFileSync("tmux", [
           "new-window", "-d",
           "-n", windowName,
           "-P", "-F", "#{session_name}:#{window_index}\t#{pane_id}",
           ...envArgs,
-          "--", "pi", "-e", tmpExtPath, ...modelArgs,
+          "--", "pi", "-e", tmpExtPath, ...modelArgs, ...toolArgs,
         ], { encoding: "utf-8" }).trim();
 
         const [wt, pd] = raw.split("\t");

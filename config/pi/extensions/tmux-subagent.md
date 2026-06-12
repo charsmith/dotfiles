@@ -8,8 +8,9 @@ redundant but each one fixes a specific failure we hit in testing (see
 
 ## What it gives you
 
-- **Tools**: `launch_agent` (blocking or background), `agent_reply`.
+- **Tools**: `launch_agent` (blocking or background, optional `agent` definition), `agent_reply`.
 - **Commands**: `/agents` (list), `/agents-clear` (drop finished cards).
+- **Agent definitions**: `~/.config/pi/agents/<name>.md` — YAML frontmatter (`name`, `description`, `tools`) + system prompt body. Pass `agent="<name>"` to `launch_agent` to apply the system prompt and tool list to the child session.
 - A **widget card** per live agent above the editor (name · model, status pill,
   elapsed + live ↑/↓/cost stats, task), driven by a 1s tick + `fs.watch` for
   instant updates.
