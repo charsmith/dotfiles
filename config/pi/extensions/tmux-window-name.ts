@@ -10,6 +10,10 @@ export default function (pi: ExtensionAPI) {
 
   if (!inTmux) return;
 
+  // Subagent windows are named by the launcher (pi:<name>) so the parent and
+  // the human can find them — don't clobber that with the cwd basename.
+  if (process.env.PI_SUBAGENT) return;
+
   pi.on("session_start", async (_event, ctx) => {
     const name = basename(ctx.cwd);
     if (!name) return;
