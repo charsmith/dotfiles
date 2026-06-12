@@ -62,6 +62,7 @@ bash ~/.dotfiles/scripts/install-deps-macos.sh    # or install-deps-ubuntu.sh
 | `config/pi/extensions/catppuccin-footer.ts` | Pi footer extension — same catppuccin mocha pill style as the Claude status line |
 | `config/pi/extensions/tmux-window-name.ts` | Pi extension — renames tmux window to basename of the working directory on session start |
 | `config/pi/extensions/tmux-pi-state.ts` | Pi extension — drives tmux window pill green while pi is running, reverts to gray on idle/shutdown |
+| `config/pi/extensions/tmux-subagent.ts` | Pi extension — `launch_agent`/`agent_reply` tools spawn pi subagents in tmux windows (blocking or background). File-based IPC via `$TMPDIR/pi-agent-*` state/inbox files; windows tracked by stable pane id; per-agent widget card. Guardrails prompts surface as an inline parent dialog (Allow/Deny driven by `tmux send-keys`) or can be answered in the child window. Architecture documented in `tmux-subagent.md` |
 | `_bash_profile` | `~/.bash_profile` — delegates to `~/.bashrc` for login shells |
 | `_bashrc` | `~/.bashrc` entry point — sources `~/.config/bash/bashrc` |
 | `_inputrc` | Readline config |
@@ -112,7 +113,7 @@ When iterating on hook behavior, **test live before committing** — hook event 
 
 Use these scopes consistently when committing changes to this repo:
 
-`nvim`, `bash`, `tmux`, `wezterm`, `starship`, `claude`, `scripts`, `bootstrap`, `notifications`
+`nvim`, `bash`, `tmux`, `wezterm`, `starship`, `claude`, `pi`, `scripts`, `bootstrap`, `notifications`
 
 ## Secrets (macOS)
 
