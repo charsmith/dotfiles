@@ -136,6 +136,23 @@ export default function (pi: ExtensionAPI) {
   let latestCtx: ExtensionContext | null = null;
   let tickInterval: ReturnType<typeof setInterval> | null = null;
   let tickCount = 0;
+  let currentModelLabel = "";   // updated on model_select; used in renderCall
+
+  // ── Model label ─────────────────────────────────────────────────────────
+
+  // Return a compact display label for a model string like "anthropic/claude-opus-4-5".
+  // Strips the provider prefix, then strips well-known model-family prefixes
+  // ("claude-", "gemini-", "gpt-") so we just see "opus-4-5", "2.0-flash", etc.
+  function shortModelName(modelStr: string): string {
+    // Strip "provider/" prefix
+    const slash = modelStr.indexOf("/");
+    let id = slash >= 0 ? modelStr.slice(slash + 1) : modelStr;
+    // Strip well-known family prefixes
+    for (const prefix of ["claude-", "gemini-", "gpt-"]) {
+      if (id.startsWith(prefix)) { id = id.slice(prefix.length); break; }
+    }
+    return id;
+  }
 
   // ── Tmux helper ──────────────────────────────────────────────────────────
 
@@ -257,7 +274,7 @@ export default function (pi: ExtensionAPI) {
         agent.status         = "running";
         agent.stopReason     = undefined;
         agent.notifiedStopped = false;
-        agent.model          = state.model ?? agent.model;
+        agent.model          = state.model ? shortModelName(state.model) : agent.model;
         setWidgetForAgent(agent);
         return;
       }
@@ -266,7 +283,7 @@ export default function (pi: ExtensionAPI) {
         agent.status     = "stopped";
         agent.stopReason = state.reason ?? "needs your input";
         agent.prompt     = state.prompt;
-        agent.model      = state.model ?? agent.model;
+        agent.model      = state.model ? shortModelName(state.model) : agent.model;
         setWidgetForAgent(agent);
         if (!agent.notifiedStopped) {
           agent.notifiedStopped = true;
@@ -277,7 +294,7 @@ export default function (pi: ExtensionAPI) {
 
       if (state.status === "done" || state.status === "error") {
         agent.status = state.status;
-        agent.model  = state.model ?? agent.model;
+        agent.model  = state.model ? shortModelName(state.model) : agent.model;
         agent.usage  = state.usage;
         finishAgent(agent, state.output, state.status === "error");
         return;
@@ -292,7 +309,7 @@ export default function (pi: ExtensionAPI) {
         try {
           const s = JSON.parse(readFileSync(agent.stateFile, "utf-8")) as AgentState;
           output = s.output;
-          agent.model = s.model ?? agent.model;
+          agent.model = s.model ? shortModelName(s.model) : agent.model;
           agent.usage = s.usage;
         } catch {}
       }
@@ -516,6 +533,8 @@ export default function (pi: ExtensionAPI) {
       "or an interactive question) it pauses and you respond by switching to its",
       "tmux window. For plain follow-up instructions to a running/stopped",
       "background agent you can also use agent_reply.",
+      "NOTE: this tool is only available to the top-level session.",
+      "Subagents cannot launch further agents.",
     ].join(" "),
     promptSnippet: "Launch a subagent in a tmux window (blocking or background)",
     parameters: Type.Object({
@@ -529,10 +548,29 @@ export default function (pi: ExtensionAPI) {
             "'background': return immediately; result arrives as a follow-up.",
         },
       )),
+      model: Type.Optional(Type.Union([
+        Type.Literal("anthropic/claude-haiku-4-5"),
+        Type.Literal("anthropic/claude-sonnet-4-6"),
+        Type.Literal("anthropic/claude-opus-4-8"),
+        Type.Literal("anthropic/claude-fable-5"),
+      ], {
+        description:
+          "Model to use for the agent. Defaults to the current session model. " +
+          "Use a cheaper/faster model (haiku, sonnet) for straightforward tasks " +
+          "and a more capable one (opus) for complex reasoning.",
+      })),
     }),
 
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       latestCtx = ctx;
+
+      if (process.env.PI_SUBAGENT) {
+        return {
+          content: [{ type: "text", text: "Error: subagents are not allowed to launch other agents." }],
+          details: {}, isError: true,
+        };
+      }
+
       const mode: AgentMode = params.mode === "background" ? "background" : "blocking";
 
       const session = currentTmuxSession();
@@ -676,6 +714,23 @@ export default function (pi: ExtensionAPI) {
       let windowTarget: string;
       let paneId: string;
 
+      // Resolve the model to use: explicit param > current session model.
+      // Parse "provider/model-id" or bare "model-id" from the param.
+      let agentProvider: string | undefined;
+      let agentModelId: string | undefined;
+      if (params.model) {
+        const slash = params.model.indexOf("/");
+        if (slash > 0) {
+          agentProvider = params.model.slice(0, slash);
+          agentModelId  = params.model.slice(slash + 1);
+        } else {
+          agentModelId = params.model;
+        }
+      } else if (ctx.model) {
+        agentProvider = ctx.model.provider;
+        agentModelId  = ctx.model.id;
+      }
+
       try {
         const piDir   = process.env.PI_CODING_AGENT_DIR ?? "";
         // PI_SUBAGENT tells tmux-window-name.ts not to rename this window to the
@@ -683,12 +738,16 @@ export default function (pi: ExtensionAPI) {
         const envArgs = ["-e", "PI_SUBAGENT=1"];
         if (piDir) envArgs.push("-e", `PI_CODING_AGENT_DIR=${piDir}`);
 
+        const modelArgs: string[] = [];
+        if (agentProvider) modelArgs.push("--provider", agentProvider);
+        if (agentModelId)  modelArgs.push("--model",    agentModelId);
+
         const raw = execFileSync("tmux", [
           "new-window", "-d",
           "-n", windowName,
           "-P", "-F", "#{session_name}:#{window_index}\t#{pane_id}",
           ...envArgs,
-          "--", "pi", "-e", tmpExtPath,
+          "--", "pi", "-e", tmpExtPath, ...modelArgs,
         ], { encoding: "utf-8" }).trim();
 
         const [wt, pd] = raw.split("\t");
@@ -712,10 +771,16 @@ export default function (pi: ExtensionAPI) {
 
       // ── Register + start ticking ──────────────────────────────────────
       const id = `${timestamp}-${Math.random().toString(36).slice(2, 6)}`;
+      // Build a display label for the widget card from the resolved model.
+      const launchModelLabel = agentProvider && agentModelId
+        ? shortModelName(`${agentProvider}/${agentModelId}`)
+        : agentModelId ? shortModelName(agentModelId) : undefined;
+
       const agent: AgentEntry = {
         id, name: params.name, windowName, task: params.task, mode,
         windowTarget, paneId, extFile: tmpExtPath, stateFile, inboxFile,
         status: "running", startedAt: timestamp,
+        model: launchModelLabel,
       };
       agents.set(id, agent);
 
@@ -751,12 +816,15 @@ export default function (pi: ExtensionAPI) {
     },
 
     renderCall(args, theme, context) {
-      const name = args.name ?? "…";
-      const task = args.task ?? "…";
-      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+      const name      = args.name ?? "…";
+      const task      = args.task ?? "…";
+      // Prefer the explicit arg, fall back to the current session model.
+      const rawModel  = (args as any).model ?? currentModelLabel;
+      const modelTag  = rawModel ? ` [${shortModelName(rawModel)}]` : "";
+      const text      = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
       text.setText(
         theme.fg("accent", "→ ") + theme.fg("toolTitle", theme.bold("launch_agent ")) +
-        theme.fg("accent", name) +
+        theme.fg("accent", name) + theme.fg("dim", modelTag) +
         "\n  " + theme.fg("dim", task.length > 72 ? task.slice(0, 71) + "…" : task)
       );
       return text;
@@ -779,7 +847,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "agent_reply",
     label: "Agent Reply",
-    description: "Inject a follow-up user message into a running or stopped background agent (by id from launch_agent). Use it to add instructions or context. It cannot dismiss a guardrails permission prompt or an interactive question — those must be answered by switching to the agent's tmux window. Only works while the agent is still active; once it finishes, its window closes.",
+    description: "Inject a follow-up user message into a running or stopped background agent (by id from launch_agent). Use it to add instructions or context. It cannot dismiss a guardrails permission prompt or an interactive question — those must be answered by switching to the agent's tmux window. Only works while the agent is still active; once it finishes, its window closes. NOTE: only available to the top-level session — subagents cannot use this tool.",
     promptSnippet: "Send a follow-up message to a running/stopped background subagent",
     parameters: Type.Object({
       id: Type.String({ description: "Agent ID from launch_agent" }),
@@ -788,6 +856,14 @@ export default function (pi: ExtensionAPI) {
 
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       latestCtx = ctx;
+
+      if (process.env.PI_SUBAGENT) {
+        return {
+          content: [{ type: "text", text: "Error: subagents are not allowed to use agent_reply." }],
+          details: {}, isError: true,
+        };
+      }
+
       const agent = agents.get(params.id);
 
       if (!agent) {
@@ -864,8 +940,15 @@ export default function (pi: ExtensionAPI) {
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
+  pi.on("model_select", (event) => {
+    currentModelLabel = `${event.model.provider}/${event.model.id}`;
+  });
+
   pi.on("session_start", async (_event, ctx) => {
     latestCtx = ctx;
+    // Seed the model label — model_select only fires on changes, so if the
+    // extension loads after the model is already set we'd otherwise start empty.
+    if (ctx.model) currentModelLabel = `${ctx.model.provider}/${ctx.model.id}`;
     stopTicking();
     for (const id of agents.keys()) clearWidgetForAgent(id);
     agents.clear();
