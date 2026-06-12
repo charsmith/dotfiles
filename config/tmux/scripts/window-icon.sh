@@ -4,6 +4,7 @@
 # is unreliable on macOS.
 pane_pid=$1
 current_cmd=$2
+window_name=$3
 
 if [ "$current_cmd" = "nvim" ]; then
   # NOTE: these escape sequences look wrong but they work — do not "fix" them.
@@ -64,14 +65,10 @@ check_pi_tree() {
 }
 
 if check_pi_tree "$pane_pid"; then
-  # Check if this is a subagent window (@pi_subagent option set by tmux-subagent.ts).
-  # Look up the pane id from the pid, then check the window option.
-  pane_id=$(tmux list-panes -a -F '#{pane_pid} #{pane_id}' 2>/dev/null \
-    | awk -v pid="$pane_pid" '$1==pid {print $2; exit}')
-  is_subagent=$(tmux show-window-options -wv -t "$pane_id" @pi_subagent 2>/dev/null)
-  if [ "$is_subagent" = "1" ]; then
-    printf '\xe3\x85\x9b ' # ㅛ U+315B Hangul YO (upside-down π for subagents)
-  else
-    printf '\xcf\x80 ' # π U+03C0
-  fi
+  # Subagent windows are named "pi:<name>" — use ㅛ (U+315B, Hangul YO),
+  # which looks like an upside-down π. Regular pi sessions use π (U+03C0).
+  case "$window_name" in
+    pi:*) printf '\xe3\x85\x9b ' ;; # ㅛ U+315B
+    *)    printf '\xcf\x80 '     ;; # π U+03C0
+  esac
 fi

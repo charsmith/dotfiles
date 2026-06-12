@@ -25,13 +25,11 @@ export default function (pi: ExtensionAPI) {
   // Nerd Font rounded pill caps (U+E0B6 left, U+E0B4 right)
   const lc = "\uE0B6";
   const rc = "\uE0B4";
-  // Subagent windows use ㅛ (U+315B) directly; regular pi sessions call window-icon.sh.
+  // window_name is passed to window-icon.sh so it can detect subagent windows
+  // (names starting with "pi:") without needing tmux user-option lookups.
   // U+315B (Hangul YO) has a horizontal bar with two strokes rising from it —
   // a natural upside-down π. Coincidentally U+3160 (Hangul YU) looks like π itself.
-  const isSubagent = Boolean(process.env.PI_SUBAGENT);
-  const icon = isSubagent
-    ? "\u315B "   // ㅛ — upside-down π for subagents
-    : "#(~/.config/tmux/scripts/window-icon.sh #{pane_pid} #{pane_current_command})";
+  const icon = "#(~/.config/tmux/scripts/window-icon.sh #{pane_pid} #{pane_current_command} #{window_name})";
 
   function pillFmt(color: string): string {
     return (
@@ -43,14 +41,11 @@ export default function (pi: ExtensionAPI) {
 
   function setPill(color: string): void {
     try {
-      const fmt = JSON.stringify(pillFmt(color));
-      // For subagent windows, override both formats so the icon stays correct
-      // whether or not the window is focused (tmux uses current-format when active).
-      const cmds = isSubagent
-        ? `tmux set-window-option -t ${windowId} window-status-format ${fmt}` +
-          ` && tmux set-window-option -t ${windowId} window-status-current-format ${fmt}`
-        : `tmux set-window-option -t ${windowId} window-status-format ${fmt}`;
-      execSync(cmds + ` && tmux refresh-client -S`, { stdio: "ignore" });
+      execSync(
+        `tmux set-window-option -t ${windowId} window-status-format ${JSON.stringify(pillFmt(color))}` +
+        ` && tmux refresh-client -S`,
+        { stdio: "ignore" }
+      );
     } catch {
       // Silently ignore — tmux pane may have closed.
     }
@@ -58,11 +53,11 @@ export default function (pi: ExtensionAPI) {
 
   function revertPill(): void {
     try {
-      const cmds = isSubagent
-        ? `tmux set-window-option -ut ${windowId} window-status-format 2>/dev/null || true` +
-          ` ; tmux set-window-option -ut ${windowId} window-status-current-format 2>/dev/null || true`
-        : `tmux set-window-option -ut ${windowId} window-status-format 2>/dev/null || true`;
-      execSync(cmds + ` ; tmux refresh-client -S`, { stdio: "ignore" });
+      execSync(
+        `tmux set-window-option -ut ${windowId} window-status-format 2>/dev/null || true` +
+        ` ; tmux refresh-client -S`,
+        { stdio: "ignore" }
+      );
     } catch {
       // Silently ignore.
     }
