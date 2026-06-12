@@ -70,7 +70,7 @@ if check_pi_tree "$pane_pid"; then
     | awk -v pid="$pane_pid" '$1==pid {print $2; exit}')
   is_subagent=$(tmux show-window-options -wv -t "$pane_id" @pi_subagent 2>/dev/null)
   if [ "$is_subagent" = "1" ]; then
-    printf '\xe1\xb4\xa8 ' # ᴨ U+1D28 (upside-down π for subagents)
+    printf '\xe3\x85\x9b ' # ㅛ U+315B Hangul YO (upside-down π for subagents)
   else
     printf '\xcf\x80 ' # π U+03C0
   fi

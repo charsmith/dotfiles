@@ -25,10 +25,12 @@ export default function (pi: ExtensionAPI) {
   // Nerd Font rounded pill caps (U+E0B6 left, U+E0B4 right)
   const lc = "\uE0B6";
   const rc = "\uE0B4";
-  // Subagent windows use ᴨ (U+1D28) directly; regular pi sessions call window-icon.sh.
+  // Subagent windows use ㅛ (U+315B) directly; regular pi sessions call window-icon.sh.
+  // U+315B (Hangul YO) has a horizontal bar with two strokes rising from it —
+  // a natural upside-down π. Coincidentally U+3160 (Hangul YU) looks like π itself.
   const isSubagent = Boolean(process.env.PI_SUBAGENT);
   const icon = isSubagent
-    ? "\u1D28 "   // ᴨ — upside-down π for subagents
+    ? "\u315B "   // ㅛ — upside-down π for subagents
     : "#(~/.config/tmux/scripts/window-icon.sh #{pane_pid} #{pane_current_command})";
 
   function pillFmt(color: string): string {
