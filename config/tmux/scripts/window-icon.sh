@@ -64,5 +64,14 @@ check_pi_tree() {
 }
 
 if check_pi_tree "$pane_pid"; then
-  printf '\xcf\x80 ' # π U+03C0
+  # Check if this is a subagent window (@pi_subagent option set by tmux-subagent.ts).
+  # Look up the pane id from the pid, then check the window option.
+  pane_id=$(tmux list-panes -a -F '#{pane_pid} #{pane_id}' 2>/dev/null \
+    | awk -v pid="$pane_pid" '$1==pid {print $2; exit}')
+  is_subagent=$(tmux show-window-options -wv -t "$pane_id" @pi_subagent 2>/dev/null)
+  if [ "$is_subagent" = "1" ]; then
+    printf '\xe1\xb4\xa8 ' # ᴨ U+1D28 (upside-down π for subagents)
+  else
+    printf '\xcf\x80 ' # π U+03C0
+  fi
 fi

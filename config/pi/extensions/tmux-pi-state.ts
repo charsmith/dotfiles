@@ -25,7 +25,11 @@ export default function (pi: ExtensionAPI) {
   // Nerd Font rounded pill caps (U+E0B6 left, U+E0B4 right)
   const lc = "\uE0B6";
   const rc = "\uE0B4";
-  const icon = "#(~/.config/tmux/scripts/window-icon.sh #{pane_pid} #{pane_current_command})";
+  // Subagent windows use ᴨ (U+1D28) directly; regular pi sessions call window-icon.sh.
+  const isSubagent = Boolean(process.env.PI_SUBAGENT);
+  const icon = isSubagent
+    ? "\u1D28 "   // ᴨ — upside-down π for subagents
+    : "#(~/.config/tmux/scripts/window-icon.sh #{pane_pid} #{pane_current_command})";
 
   function pillFmt(color: string): string {
     return (

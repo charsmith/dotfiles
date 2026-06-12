@@ -763,10 +763,12 @@ export default function (pi: ExtensionAPI) {
 
       // Lock the window name: PI_SUBAGENT stops tmux-window-name.ts, and the two
       // window options stop tmux's own escape-sequence / command-based renames.
+      // @pi_subagent is read by window-icon.sh to show the subagent icon.
       // Target via the stable pane id (window index may shift later).
       try {
         execSync(`tmux set-window-option -t ${paneId} allow-rename off`, { stdio: "ignore" });
         execSync(`tmux set-window-option -t ${paneId} automatic-rename off`, { stdio: "ignore" });
+        execSync(`tmux set-window-option -t ${paneId} @pi_subagent 1`, { stdio: "ignore" });
       } catch {}
 
       // ── Register + start ticking ──────────────────────────────────────
