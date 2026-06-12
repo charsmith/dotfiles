@@ -135,6 +135,12 @@ function fmtUsage(u: AgentUsage): string {
 // ─── Extension ─────────────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
+  // When running as a subagent, this extension is still loaded from the global
+  // config directory — but subagents must not register launch_agent / agent_reply
+  // (they'd be visible to the model and it would try to use them). The temp
+  // extension handles everything the child session needs; bail here.
+  if (process.env.PI_SUBAGENT) return;
+
   const agents = new Map<string, AgentEntry>();
   let latestCtx: ExtensionContext | null = null;
   let tickInterval: ReturnType<typeof setInterval> | null = null;
@@ -201,84 +207,135 @@ export default function (pi: ExtensionAPI) {
   }
 
   // ── Widget card ──────────────────────────────────────────────────────────
+  //
+  // All agents share a single widget slot ("subagents") so the display order
+  // is always determined by startedAt — re-calling setWidget on a per-agent
+  // key would re-insert it at the end, causing flicker / reordering.
 
-  function setWidgetForAgent(agent: AgentEntry) {
+  function renderCard(agent: AgentEntry, inner: number, theme: any): string[] {
+    const statusColor: any =
+      agent.status === "running" ? "accent"
+      : agent.status === "stopped" ? "warning"
+      : agent.status === "done"    ? "success"
+      :                              "error";
+
+    const icon =
+      agent.status === "running" ? "●"
+      : agent.status === "stopped" ? "⚠"
+      : agent.status === "done"    ? "✓"
+      :                              "✗";
+
+    const cell = (styled: string): string => {
+      const vis = visibleWidth(styled);
+      return (
+        theme.fg(statusColor, "│") +
+        styled +
+        " ".repeat(Math.max(0, inner - vis)) +
+        theme.fg(statusColor, "│")
+      );
+    };
+
+    // Line 1: name · model
+    const safeName    = agent.name.replace(/[\r\n\t]+/g, " ").trim();
+    const rawNameModel = safeName + (agent.model ? ` · ${agent.model}` : "");
+    const trunc        = truncateToWidth(rawNameModel, inner - 1);
+    const dotIdx       = trunc.indexOf(" · ");
+    const nameStyled   = dotIdx >= 0
+      ? theme.fg(statusColor, theme.bold(trunc.slice(0, dotIdx))) +
+        theme.fg("dim", trunc.slice(dotIdx))
+      : theme.fg(statusColor, theme.bold(trunc));
+
+    // Line 2: status indicator + pane ref + elapsed (or stop reason)
+    const elapsed    = fmtElapsed(Date.now() - agent.startedAt);
+    const u          = agent.usage;
+    const liveStats  = u && (u.turns || u.input || u.output || u.cost)
+      ? `↑${fmtTokens(u.input)} ↓${fmtTokens(u.output)}  $${u.cost.toFixed(3)}  ${elapsed}`
+      : elapsed;
+    const safeReason = agent.stopReason?.replace(/[\r\n\t]+/g, " ").trim();
+    const rawStatus  = agent.status === "stopped" && safeReason
+      ? `${icon} stopped  [${agent.windowTarget}]  ${safeReason}`
+      : `${icon} ${agent.status}  [${agent.windowTarget}]  ${liveStats}`;
+    const statusText = truncateToWidth(rawStatus, inner - 1);
+
+    // Line 3: task text — collapse newlines/control chars so the cell stays
+    // on a single terminal line (LLMs often pass multi-line task strings).
+    const flatTask = agent.task.replace(/[\r\n\t]+/g, " ").trim();
+    const taskText = truncateToWidth(flatTask, inner - 1);
+
+    const top = theme.fg(statusColor, "┌" + "─".repeat(inner) + "┐");
+    const bot = theme.fg(statusColor, "└" + "─".repeat(inner) + "┘");
+
+    return [
+      top,
+      cell(" " + nameStyled),
+      cell(" " + theme.fg(statusColor, statusText)),
+      cell(" " + theme.fg("dim", taskText)),
+      bot,
+    ];
+  }
+
+  // The single widget is registered once per session (lazily on first agent)
+  // and cleared when the last agent is removed. Between those events we just
+  // flip a dirty flag and call requestRender(); render() skips recomputing if
+  // nothing has changed. invalidate() clears the cache on theme changes.
+  let widgetDirty        = false;
+  let widgetRegistered   = false;
+  let widgetHandle: { requestRender(): void } | null = null;
+  let cachedLines: string[] = [];
+  let cachedWidth        = -1;
+
+  function refreshWidget() {
     const ctx = latestCtx;
     if (!ctx) return;
 
-    ctx.ui.setWidget(`sub-${agent.id}`, (_tui, theme) => ({
-      render(width: number): string[] {
-        const MAX_WIDTH  = 58;
-        const cardWidth  = Math.min(width, MAX_WIDTH);
-        const inner      = Math.max(0, cardWidth - 2);
+    if (agents.size === 0) {
+      ctx.ui.setWidget("subagents", undefined);
+      widgetRegistered = false;
+      widgetHandle = null;
+      cachedLines = [];
+      cachedWidth = -1;
+      return;
+    }
 
-        const statusColor: any =
-          agent.status === "running" ? "accent"
-          : agent.status === "stopped" ? "warning"
-          : agent.status === "done"    ? "success"
-          :                              "error";
+    widgetDirty = true;
+    widgetHandle?.requestRender();
 
-        const icon =
-          agent.status === "running" ? "●"
-          : agent.status === "stopped" ? "⚠"
-          : agent.status === "done"    ? "✓"
-          :                              "✗";
+    if (widgetRegistered) return;  // already set up — dirty flag + requestRender is enough
+    widgetRegistered = true;
 
-        const cell = (styled: string): string => {
-          const vis = visibleWidth(styled);
-          return (
-            theme.fg(statusColor, "│") +
-            styled +
-            " ".repeat(Math.max(0, inner - vis)) +
-            theme.fg(statusColor, "│")
-          );
-        };
-
-        // Line 1: name · model
-        const rawNameModel = agent.name + (agent.model ? ` · ${agent.model}` : "");
-        const trunc        = truncateToWidth(rawNameModel, inner - 1);
-        const dotIdx       = trunc.indexOf(" · ");
-        const nameStyled   = dotIdx >= 0
-          ? theme.fg(statusColor, theme.bold(trunc.slice(0, dotIdx))) +
-            theme.fg("dim", trunc.slice(dotIdx))
-          : theme.fg(statusColor, theme.bold(trunc));
-
-        // Line 2: status indicator + pane ref + elapsed (or stop reason)
-        const elapsed    = fmtElapsed(Date.now() - agent.startedAt);
-        const u          = agent.usage;
-        const liveStats  = u && (u.turns || u.input || u.output || u.cost)
-          ? `↑${fmtTokens(u.input)} ↓${fmtTokens(u.output)}  $${u.cost.toFixed(3)}  ${elapsed}`
-          : elapsed;
-        const rawStatus  = agent.status === "stopped" && agent.stopReason
-          ? `${icon} stopped  [${agent.windowTarget}]  ${agent.stopReason}`
-          : `${icon} ${agent.status}  [${agent.windowTarget}]  ${liveStats}`;
-        const statusText = truncateToWidth(rawStatus, inner - 1);
-
-        // Line 3: task text
-        const taskText = truncateToWidth(agent.task, inner - 1);
-
-        const top = theme.fg(statusColor, "┌" + "─".repeat(inner) + "┐");
-        const bot = theme.fg(statusColor, "└" + "─".repeat(inner) + "┘");
-
-        return [
-          top,
-          cell(" " + nameStyled),
-          cell(" " + theme.fg(statusColor, statusText)),
-          cell(" " + theme.fg("dim", taskText)),
-          bot,
-        ];
-      },
-      invalidate() {},
-    }));
+    ctx.ui.setWidget("subagents", (tui, theme) => {
+      widgetHandle = tui;
+      return {
+        render(width: number): string[] {
+          if (!widgetDirty && width === cachedWidth) return cachedLines;
+          widgetDirty = false;
+          cachedWidth = width;
+          const MAX_WIDTH = 58;
+          const inner     = Math.max(0, Math.min(width, MAX_WIDTH) - 2);
+          // Sort by launch time so the order never changes as widgets update.
+          const sorted = Array.from(agents.values()).sort((a, b) => a.startedAt - b.startedAt);
+          const lines: string[] = [];
+          for (const agent of sorted) {
+            if (lines.length > 0) lines.push("");  // gap between cards
+            lines.push(...renderCard(agent, inner, theme));
+          }
+          cachedLines = lines;
+          return lines;
+        },
+        invalidate() {
+          // Called by the TUI on theme changes — clear the cache so the next
+          // render() recomputes with the fresh theme colours.
+          cachedLines = [];
+          cachedWidth = -1;
+        },
+      };
+    });
   }
 
-  function clearWidgetForAgent(id: string) {
-    latestCtx?.ui.setWidget(`sub-${id}`, undefined);
-  }
-
-  function updateAllWidgets() {
-    for (const agent of agents.values()) setWidgetForAgent(agent);
-  }
+  // Aliases kept so the rest of the code compiles without changes.
+  function setWidgetForAgent(_agent: AgentEntry) { refreshWidget(); }
+  function clearWidgetForAgent(_id: string)       { refreshWidget(); }
+  function updateAllWidgets()                      { refreshWidget(); }
 
   // ── State file polling + followUp delivery ───────────────────────────────
 
@@ -649,7 +706,8 @@ export default function (pi: ExtensionAPI) {
   let fired = false;
   const startedAt = Date.now();
   let modelId = "";
-  let totalInput = 0, totalOutput = 0, totalCost = 0, totalTurns = 0;
+  let contextTokens = 0, totalOutput = 0, totalCost = 0, totalTurns = 0;
+  let sessionCtx: any = null;
 
   // extFile cleaned up by parent (pi watches -e files; self-deletion unloads the extension)
 
@@ -661,7 +719,8 @@ export default function (pi: ExtensionAPI) {
     modelId = event.model.id;
   });
 
-  pi.on("session_start", (_event, _ctx) => {
+  pi.on("session_start", (_event, ctx) => {
+    sessionCtx = ctx;
     if (fired) return;
     fired = true;
     writeState({ status: "running" });
@@ -674,21 +733,22 @@ export default function (pi: ExtensionAPI) {
     writeState({ status: "running", model: modelId || undefined });
   });
 
-  // After each turn, accumulate usage from event.message and write to state
-  // file so the parent widget card can show live counters while running.
+  // After each turn, snapshot the live context-window size (same source as the
+  // footer status bar) and accumulate output tokens + cost. Written to the state
+  // file so the parent widget card shows live counters while the agent runs.
   pi.on("turn_end", (event) => {
     const m = (event as any).message;
-    // input = current context window size (last turn's input + cacheRead + cacheWrite),
-    // matching what the pi status bar shows via ctx.getContextUsage().tokens.
-    totalInput   = (m?.usage?.input ?? 0) + (m?.usage?.cacheRead ?? 0) + (m?.usage?.cacheWrite ?? 0);
-    totalOutput += m?.usage?.output      ?? 0;
-    totalCost   += m?.usage?.cost?.total ?? 0;
+    // Snapshot — not a running sum. getContextUsage().tokens computes
+    // totalTokens || (input + output + cacheRead + cacheWrite), matching the footer.
+    contextTokens  = sessionCtx?.getContextUsage()?.tokens ?? 0;
+    totalOutput   += m?.usage?.output      ?? 0;
+    totalCost     += m?.usage?.cost?.total ?? 0;
     if (!modelId && m?.model) modelId = m.model;
     totalTurns++;
     writeState({
       status: "running",
       model: modelId || undefined,
-      usage: { turns: totalTurns, input: totalInput, output: totalOutput, cost: totalCost, elapsedMs: Date.now() - startedAt },
+      usage: { turns: totalTurns, input: contextTokens, output: totalOutput, cost: totalCost, elapsedMs: Date.now() - startedAt },
     });
   });
 
@@ -717,17 +777,9 @@ export default function (pi: ExtensionAPI) {
   // fires once the whole run completes (after any guardrails pause the human
   // already cleared), so it is the authoritative "task is over" signal.
   pi.on("agent_end", (event, ctx) => {
-    let input = 0, output = 0, cost = 0, turns = 0;
-    for (const entry of ctx.sessionManager.getBranch()) {
-      if (entry.type === "message" && entry.message.role === "assistant") {
-        const m = entry.message as any;
-        input  += m.usage?.input  ?? 0;
-        output += m.usage?.output ?? 0;
-        cost   += m.usage?.cost?.total ?? 0;
-        if (!modelId && m.model) modelId = m.model;
-        turns++;
-      }
-    }
+    // Reuse the accumulators from turn_end — consistent with the live widget stats.
+    // Take a final getContextUsage() snapshot for input (same as the footer).
+    const input = ctx.getContextUsage()?.tokens ?? contextTokens;
     let finalOutput = "";
     for (let i = event.messages.length - 1; i >= 0; i--) {
       const msg = event.messages[i];
@@ -743,7 +795,7 @@ export default function (pi: ExtensionAPI) {
       status: "done",
       output: finalOutput || "(no output)",
       model: modelId || undefined,
-      usage: { turns, input, output, cost, elapsedMs: Date.now() - startedAt },
+      usage: { turns: totalTurns, input, output: totalOutput, cost: totalCost, elapsedMs: Date.now() - startedAt },
     });
   });
 
@@ -1020,6 +1072,11 @@ export default function (pi: ExtensionAPI) {
     stopTicking();
     for (const id of agents.keys()) clearWidgetForAgent(id);
     agents.clear();
+    // Reset widget registration so it binds to the new context on next launch.
+    widgetRegistered = false;
+    widgetHandle = null;
+    cachedLines = [];
+    cachedWidth = -1;
   });
 
   pi.on("session_shutdown", async () => {
