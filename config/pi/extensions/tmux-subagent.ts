@@ -34,8 +34,13 @@
  * Commands: /agents, /agents-clear
  *
  * Agent definitions live in ~/.config/pi/agents/<name>.md — YAML frontmatter
- * (name, description, tools) + system prompt body. Pass agent=<name> to
- * launch_agent to apply that agent's system prompt and tool list.
+ * (name, description, tools, skills) + system prompt body. Pass agent=<name> to
+ * launch_agent to apply the agent's system prompt, tool list, and skills.
+ *
+ * Skills policy: subagents always launch with --no-skills by default.
+ *   skills: "og,cy,ta"  — load only those named skills from ~/.config/pi/skills/
+ *   skills: "*"         — load all global skills (skip --no-skills)
+ *   skills omitted      — no skills
  *
  * See tmux-subagent.md (next to this file) for the full architecture: the
  * file-based IPC, the stop/approval flow, window tracking, and the gotchas.
@@ -52,8 +57,26 @@ import * as path from "node:path";
 interface AgentDef {
   name: string;
   description: string;
-  tools: string;
+  tools: string;        // comma-separated tool list, or "" for default
+  skills: string;       // comma-separated skill names, "*" for all globals, or "" for none
   systemPrompt: string;
+}
+
+// Skill search dirs — same locations pi discovers globally
+const SKILL_DIRS = [
+  path.join(os.homedir(), ".config", "pi", "skills"),
+  path.join(os.homedir(), ".pi", "agent", "skills"),
+];
+
+function resolveSkillPath(skillName: string): string | null {
+  for (const dir of SKILL_DIRS) {
+    const p = path.join(dir, skillName);
+    if (existsSync(path.join(p, "SKILL.md"))) return p;
+    // Also allow bare .md skills
+    const md = path.join(dir, `${skillName}.md`);
+    if (existsSync(md)) return md;
+  }
+  return null;
 }
 
 function loadAgentDef(agentName: string): AgentDef | null {
@@ -78,6 +101,7 @@ function loadAgentDef(agentName: string): AgentDef | null {
         name: frontmatter.name,
         description: frontmatter.description || "",
         tools: frontmatter.tools || "",
+        skills: frontmatter.skills?.trim() || "",
         systemPrompt: match[2].trim(),
       };
     } catch { continue; }
@@ -932,16 +956,36 @@ export default function (pi: ExtensionAPI) {
         if (agentProvider) modelArgs.push("--provider", agentProvider);
         if (agentModelId)  modelArgs.push("--model",    agentModelId);
 
-        // Pass tool restrictions from the agent definition
+        // Tool restrictions from the agent definition
         const toolArgs: string[] = [];
         if (agentDef?.tools) toolArgs.push("--tools", agentDef.tools);
+
+        // Skills policy:
+        //   - Default (no agent, or agent with no skills field): --no-skills
+        //   - Agent with skills: "*": load all global skills (no --no-skills)
+        //   - Agent with skills: "og,cy,...": --no-skills + --skill <path> per named skill
+        const skillArgs: string[] = [];
+        const agentSkills = agentDef?.skills ?? "";
+        if (agentSkills === "*") {
+          // load all global skills — omit --no-skills
+        } else {
+          skillArgs.push("--no-skills");
+          if (agentSkills) {
+            for (const skillName of agentSkills.split(",").map(s => s.trim()).filter(Boolean)) {
+              const skillPath = resolveSkillPath(skillName);
+              if (skillPath) {
+                skillArgs.push("--skill", skillPath);
+              }
+            }
+          }
+        }
 
         const raw = execFileSync("tmux", [
           "new-window", "-d",
           "-n", windowName,
           "-P", "-F", "#{session_name}:#{window_index}\t#{pane_id}",
           ...envArgs,
-          "--", "pi", "-e", tmpExtPath, ...modelArgs, ...toolArgs,
+          "--", "pi", "-e", tmpExtPath, ...modelArgs, ...toolArgs, ...skillArgs,
         ], { encoding: "utf-8" }).trim();
 
         const [wt, pd] = raw.split("\t");
