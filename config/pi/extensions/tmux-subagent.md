@@ -11,7 +11,8 @@ redundant but each one fixes a specific failure we hit in testing (see
 - **Tools**: `launch_agent` (blocking or background), `agent_reply`.
 - **Commands**: `/agents` (list), `/agents-clear` (drop finished cards).
 - A **widget card** per live agent above the editor (name · model, status pill,
-  elapsed, task), driven by a 1s tick.
+  elapsed + live ↑/↓/cost stats, task), driven by a 1s tick + `fs.watch` for
+  instant updates.
 
 ## The two processes
 
@@ -21,10 +22,11 @@ parent pi (this session)                child pi (one per agent)
 launch_agent tool                        pi -e <tmpBase>.ts   (a generated extension)
   spawns tmux window  ───────────────▶   runs in `tmux new-window -d`
   registers AgentEntry
-  starts 1s tick loop                    child temp extension:
+  starts 1s tick + fs.watch              child temp extension:
                                            session_start → send task, write "running"
   pollAgentState() reads  ◀───── .state.json ── turn_start    → write "running"
-  state file every tick                    guardrails prompted → write "stopped"(+ctx)
+  state file every tick;                   turn_end      → write "running" + live usage
+  fs.watch fires instantly                 guardrails prompted → write "stopped"(+ctx)
                                            agent_end     → write "done"(+output,usage)
   agent_reply / inbox     ───── .inbox.txt ──▶ poll inbox → sendUserMessage()
 ```
@@ -41,7 +43,7 @@ memory and no socket — coordination is **file-based IPC** in `os.tmpdir()`.
 | File | Direction | Purpose |
 |------|-----------|---------|
 | `{tmpBase}.ts` | parent → child | the generated child extension; passed as `pi -e`. Parent unlinks it on finish. |
-| `{tmpBase}.state.json` | child → parent | `{status, output?, reason?, prompt?, model?, usage?}`. The parent polls this. |
+| `{tmpBase}.state.json` | child → parent | `{status, output?, reason?, prompt?, model?, usage?}`. The parent polls every 1s; `fs.watch` fires on each write for instant widget updates. |
 | `{tmpBase}.inbox.txt` | parent → child | a queued user message; child injects it via `sendUserMessage` then deletes the file. |
 
 ### State machine (`status` in `.state.json`)
@@ -50,7 +52,8 @@ memory and no socket — coordination is **file-based IPC** in `os.tmpdir()`.
 running ──(guardrails prompt)──▶ stopped ──(answered)──▶ running ──▶ done | error
 ```
 
-- `running` is (re)written on `session_start` and every `turn_start`.
+- `running` is (re)written on `session_start`, every `turn_start`, and every
+  `turn_end` (with live usage so the widget card stays fresh).
 - `stopped` is written by the child's `guardrails:action:prompted` handler and
   carries a `prompt` object (`kind`, `toolName`, `path`, `reason`).
 - `done`/`error` is always written on `agent_end` (see gotcha #1).
@@ -63,7 +66,8 @@ only in how the **result** is returned:
 - **blocking** (default): `execute()` returns a `Promise` that `finishAgent`
   resolves with a normal tool result (output + usage). Renders inline like any
   tool. The execute `signal` is wired so cancelling the turn kills the child.
-- **background**: `execute()` returns immediately; `finishAgent` delivers the
+- **background**: `execute()` returns immediately; the working indicator is
+  hidden (`ctx.ui.setWorkingVisible(false)`) and `finishAgent` delivers the
   result later via `pi.sendMessage(..., { deliverAs: "followUp", triggerTurn: true })`.
 
 `AgentEntry.mode` records which, and `finishAgent` branches on it.
@@ -80,10 +84,10 @@ For each tracked agent:
 3. If we still think it's `running` but the **pane is dead** (`isPaneAlive`),
    the child crashed without writing `done` → `finishAgent` with whatever we have.
 
-`finishAgent` → `cleanupAgent` (kill window by pane id, unlink the 3 files, clear
-the widget, drop from the map, stop the tick if nothing is left) → then resolve
-(blocking) or follow-up (background). The result text appends any inline
-permission decisions.
+`finishAgent` → `cleanupAgent` (kill pane by pane id, unlink the 3 files, close
+the `fs.watch` handle, clear the widget, drop from the map, stop the tick if
+nothing is left) → then resolve (blocking) or follow-up (background). The result
+text appends any inline permission decisions.
 
 ## Stop / approval flow (the interesting part)
 
@@ -98,7 +102,9 @@ first. The child writes `stopped` + the prompt context. The parent then:
 - The choice **drives the child's modal via `tmux send-keys` to its pane**:
   - `Allow once` → `Enter` (the modal's first option is always "Allow once")
   - `Deny` → `Escape` (Esc = deny in that modal)
-  - `Open …` → `tmux select-window` so the human gets the advanced grant options.
+  - `Open …` → calls `windowForPane(agent.paneId)` for the current
+    `session:index` (never the stale `windowTarget`), then
+    `tmux select-window -t <session:index>` to switch the client there.
 - On Allow/Deny we record the decision, toast it immediately, and `markResumed`
   (which **rewrites the state file to `running`** — see gotcha #2).
 
@@ -122,10 +128,10 @@ two response paths never fight.
 
 - A window's `session:index` is **not stable** (other windows open/close;
   `renumber-windows` shifts them). We capture the **pane id** (`%N`) at spawn and
-  use it for *every* tmux command (`kill-window`, `set-window-option`,
-  `send-keys`, `select-window`). The `session:index` is only ever recomputed
-  from the pane id for *display*. This is why killing a finished agent can never
-  hit one of your other windows.
+  use it for *every* tmux command (`kill-pane`, `set-window-option`,
+  `send-keys`). The `session:index` is only ever recomputed from the pane id
+  (via `windowForPane`) for *display* and for `select-window`. This is why
+  killing a finished agent can never hit one of your other windows.
 - The window keeps its `pi:<name>` label because:
   1. the child is launched with `-e PI_SUBAGENT=1`, and `tmux-window-name.ts`
      early-returns when that env var is set (otherwise it renames the window to
@@ -151,6 +157,18 @@ two response paths never fight.
    `deliverAs: "nextTurn"` message (which looked like it "didn't show up").
 5. **`os.tmpdir()` ≠ `/tmp` on macOS** (repeated because it cost real debugging
    time).
+6. **`select-window` needs a `session:index` target, not a pane id.** Pane IDs
+   (`%N`) are not valid targets for `tmux select-window`. The code always calls
+   `windowForPane(agent.paneId)` to get a fresh `session:index` first, then
+   falls back to `agent.windowTarget` if the lookup fails.
+7. **`StringEnum` instead of `Type.Union([Type.Literal(...)])`** — the `mode`
+   and `model` parameters use `StringEnum` from `@earendil-works/pi-ai` so the
+   tool schema works with Google models as the parent session's model.
+8. **Live usage vs. final usage differ in meaning.** The widget card during the
+   run shows "context window size" for input (last turn's `input + cacheRead +
+   cacheWrite`, same metric as the pi status bar). The final `done` state from
+   `agent_end` sums raw prompt tokens across all turns (total API charges). Cost
+   is cumulative (+=) in both cases.
 
 ## Guardrails coupling (assumptions to re-check on upgrade)
 
@@ -179,4 +197,3 @@ launch_agent(name:"t", task:"write \"x\" to /Users/<you>/pi-t.txt then reply OK"
 Allow/Deny dialog; Allow → `OK` inline with usage and a folded-in decision line.
 For background mode, drop `mode` or set `"background"` and answer either in the
 dialog or the `pi:t` window.
-```

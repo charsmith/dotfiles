@@ -38,9 +38,11 @@
  */
 
 import { execFileSync, execSync } from "node:child_process";
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync, watch, writeFileSync } from "node:fs";
+import type { FSWatcher } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -96,6 +98,7 @@ interface AgentEntry {
   usage?: AgentUsage;
   notifiedStopped?: boolean;
   // Set for blocking agents — resolves the launch_agent tool's execute() promise.
+  watcher?: FSWatcher;           // fs.watch on the state file for instant usage updates
   resolve?: (result: ToolResultLike) => void;
 }
 
@@ -178,6 +181,25 @@ export default function (pi: ExtensionAPI) {
     } catch { return null; }
   }
 
+  // ── State file watcher ───────────────────────────────────────────────────────────────────
+  // Watch the state file for changes — fires instantly when the child writes
+  // usage/status updates, so the widget card stays live without polling lag.
+
+  function startWatching(agent: AgentEntry): FSWatcher | undefined {
+    try {
+      return watch(agent.stateFile, { persistent: false }, () => {
+        if (!agents.has(agent.id)) return;
+        if (!existsSync(agent.stateFile)) return;
+        try {
+          const state = JSON.parse(readFileSync(agent.stateFile, "utf-8")) as AgentState;
+          if (state.usage)  agent.usage = state.usage;
+          if (state.model)  agent.model = shortModelName(state.model);
+          setWidgetForAgent(agent);
+        } catch {}
+      });
+    } catch { return undefined; }
+  }
+
   // ── Widget card ──────────────────────────────────────────────────────────
 
   function setWidgetForAgent(agent: AgentEntry) {
@@ -223,9 +245,14 @@ export default function (pi: ExtensionAPI) {
 
         // Line 2: status indicator + pane ref + elapsed (or stop reason)
         const elapsed    = fmtElapsed(Date.now() - agent.startedAt);
-        const statusText = agent.status === "stopped" && agent.stopReason
-          ? truncateToWidth(`${icon} stopped  [${agent.windowTarget}]  ${agent.stopReason}`, inner - 1)
-          : `${icon} ${agent.status}  [${agent.windowTarget}]  ${elapsed}`;
+        const u          = agent.usage;
+        const liveStats  = u && (u.turns || u.input || u.output || u.cost)
+          ? `↑${fmtTokens(u.input)} ↓${fmtTokens(u.output)}  $${u.cost.toFixed(3)}  ${elapsed}`
+          : elapsed;
+        const rawStatus  = agent.status === "stopped" && agent.stopReason
+          ? `${icon} stopped  [${agent.windowTarget}]  ${agent.stopReason}`
+          : `${icon} ${agent.status}  [${agent.windowTarget}]  ${liveStats}`;
+        const statusText = truncateToWidth(rawStatus, inner - 1);
 
         // Line 3: task text
         const taskText = truncateToWidth(agent.task, inner - 1);
@@ -266,6 +293,14 @@ export default function (pi: ExtensionAPI) {
       let state: AgentState;
       try { state = JSON.parse(readFileSync(agent.stateFile, "utf-8")); }
       catch { return; }
+
+      // Live usage update — agent still running, not paused. Update in-place
+      // but do NOT return: fall through to the pane-liveness check (Step 2) so
+      // a crashed child that leaves a stale "running" state file is still caught.
+      if (state.status === "running" && agent.status === "running") {
+        if (state.usage)  agent.usage = state.usage;
+        if (state.model)  agent.model = shortModelName(state.model);
+      }
 
       // Resumed after a pause (e.g. answered in the child window) — close any
       // dangling parent dialog, then clear the stopped flag.
@@ -386,7 +421,10 @@ export default function (pi: ExtensionAPI) {
         // is also folded into the final result so the thread/LLM is aware.
         ctx.ui.notify(`Subagent "${agent.name}": ${verb} ${what}`, verb === "allowed" ? "info" : "warning");
       } else if (choice === "Open the agent's tmux window") {
-        try { execSync(`tmux select-window -t ${agent.paneId}`, { stdio: "ignore" }); } catch {}
+        // Re-resolve the window target from the pane id — pane IDs (%N) are not
+        // valid window targets for select-window; need the session:index form.
+        const freshTarget = windowForPane(agent.paneId) ?? agent.windowTarget;
+        try { execSync(`tmux select-window -t ${freshTarget}`, { stdio: "ignore" }); } catch {}
         ctx.ui.notify(`Switched to ${agent.windowName}. Respond there.`, "info");
       } else {
         // Dismissed without choosing — leave a breadcrumb to the window.
@@ -441,11 +479,12 @@ export default function (pi: ExtensionAPI) {
     // Target the window by its stable pane id, never by index — a stale index
     // could resolve to one of the user's other windows and kill it.
     if (agent.paneId) {
-      try { execSync(`tmux kill-window -t ${agent.paneId}`, { stdio: "ignore" }); } catch {}
+      try { execSync(`tmux kill-pane -t ${agent.paneId}`, { stdio: "ignore" }); } catch {}
     }
     try { unlinkSync(agent.extFile); } catch {}
     try { unlinkSync(agent.stateFile); } catch {}
     try { unlinkSync(agent.inboxFile); } catch {}
+    agent.watcher?.close();
     clearWidgetForAgent(agent.id);
     agents.delete(agent.id);
     if (!Array.from(agents.values()).some(a => a.status === "running" || a.status === "stopped")) {
@@ -540,20 +579,17 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({
       name: Type.String({ description: "Short label for this agent (used as tmux window name)" }),
       task: Type.String({ description: "Task description to send as the agent's first message" }),
-      mode: Type.Optional(Type.Union(
-        [Type.Literal("blocking"), Type.Literal("background")],
-        {
-          description:
-            "'blocking' (default): wait and return the result inline. " +
-            "'background': return immediately; result arrives as a follow-up.",
-        },
-      )),
-      model: Type.Optional(Type.Union([
-        Type.Literal("anthropic/claude-haiku-4-5"),
-        Type.Literal("anthropic/claude-sonnet-4-6"),
-        Type.Literal("anthropic/claude-opus-4-8"),
-        Type.Literal("anthropic/claude-fable-5"),
-      ], {
+      mode: Type.Optional(StringEnum(["blocking", "background"] as const, {
+        description:
+          "'blocking' (default): wait and return the result inline. " +
+          "'background': return immediately; result arrives as a follow-up.",
+      })),
+      model: Type.Optional(StringEnum([
+        "anthropic/claude-haiku-4-5",
+        "anthropic/claude-sonnet-4-6",
+        "anthropic/claude-opus-4-8",
+        "anthropic/claude-fable-5",
+      ] as const, {
         description:
           "Model to use for the agent. Defaults to the current session model. " +
           "Use a cheaper/faster model (haiku, sonnet) for straightforward tasks " +
@@ -589,10 +625,12 @@ export default function (pi: ExtensionAPI) {
 
       // ── Temp files ────────────────────────────────────────────────────
       const timestamp = Date.now();
+      const id        = `${timestamp}-${Math.random().toString(36).slice(2, 6)}`;
       const tmpBase   = path.join(os.tmpdir(), `pi-agent-${timestamp}`);
       const tmpExtPath  = `${tmpBase}.ts`;
       const stateFile   = `${tmpBase}.state.json`;
       const inboxFile   = `${tmpBase}.inbox.txt`;
+
 
       // ── Temp extension ────────────────────────────────────────────────
       //
@@ -607,11 +645,11 @@ export default function (pi: ExtensionAPI) {
       const tmpExtSource = `
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-
 export default function (pi: ExtensionAPI) {
   let fired = false;
   const startedAt = Date.now();
   let modelId = "";
+  let totalInput = 0, totalOutput = 0, totalCost = 0, totalTurns = 0;
 
   // extFile cleaned up by parent (pi watches -e files; self-deletion unloads the extension)
 
@@ -635,6 +673,25 @@ export default function (pi: ExtensionAPI) {
   pi.on("turn_start", () => {
     writeState({ status: "running", model: modelId || undefined });
   });
+
+  // After each turn, accumulate usage from event.message and write to state
+  // file so the parent widget card can show live counters while running.
+  pi.on("turn_end", (event) => {
+    const m = (event as any).message;
+    // input = current context window size (last turn's input + cacheRead + cacheWrite),
+    // matching what the pi status bar shows via ctx.getContextUsage().tokens.
+    totalInput   = (m?.usage?.input ?? 0) + (m?.usage?.cacheRead ?? 0) + (m?.usage?.cacheWrite ?? 0);
+    totalOutput += m?.usage?.output      ?? 0;
+    totalCost   += m?.usage?.cost?.total ?? 0;
+    if (!modelId && m?.model) modelId = m.model;
+    totalTurns++;
+    writeState({
+      status: "running",
+      model: modelId || undefined,
+      usage: { turns: totalTurns, input: totalInput, output: totalOutput, cost: totalCost, elapsedMs: Date.now() - startedAt },
+    });
+  });
+
 
   // Guardrails is showing a permission prompt (ask mode) — the agent run is
   // paused waiting for the human to respond in this window. Write a transient
@@ -709,6 +766,8 @@ export default function (pi: ExtensionAPI) {
 `.trimStart();
 
       writeFileSync(tmpExtPath, tmpExtSource, { mode: 0o600 });
+      // Pre-create state file so fs.watch has a target before the child writes.
+      writeFileSync(stateFile, JSON.stringify({ status: "running" }), "utf-8");
 
       // ── Spawn tmux window ─────────────────────────────────────────────
       let windowTarget: string;
@@ -737,6 +796,13 @@ export default function (pi: ExtensionAPI) {
         // cwd basename — the launcher owns the name (pi:<name>).
         const envArgs = ["-e", "PI_SUBAGENT=1"];
         if (piDir) envArgs.push("-e", `PI_CODING_AGENT_DIR=${piDir}`);
+        // Pass provider API keys from the parent's environment — the parent
+        // already has them sourced from Keychain; a child login shell may not.
+        for (const key of Object.keys(process.env)) {
+          if (/^(ANTHROPIC|OPENAI|GEMINI|GOOGLE|XAI)_/i.test(key) && process.env[key]) {
+            envArgs.push("-e", `${key}=${process.env[key]}`);
+          }
+        }
 
         const modelArgs: string[] = [];
         if (agentProvider) modelArgs.push("--provider", agentProvider);
@@ -772,7 +838,6 @@ export default function (pi: ExtensionAPI) {
       } catch {}
 
       // ── Register + start ticking ──────────────────────────────────────
-      const id = `${timestamp}-${Math.random().toString(36).slice(2, 6)}`;
       // Build a display label for the widget card from the resolved model.
       const launchModelLabel = agentProvider && agentModelId
         ? shortModelName(`${agentProvider}/${agentModelId}`)
@@ -786,6 +851,7 @@ export default function (pi: ExtensionAPI) {
       };
       agents.set(id, agent);
 
+      agent.watcher = startWatching(agent);
       setWidgetForAgent(agent);
       startTicking();
 
