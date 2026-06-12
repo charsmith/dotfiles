@@ -16,43 +16,6 @@ Read these files at the start of every session:
 2. tools/_claude/research-workflow.md — the full step-by-step workflow (researcher + reviewer + patch pattern, frontmatter schema, commit analysis, org hierarchy tracing)
 3. tools/_claude/research-index.md — what's already been researched (check before starting anything new)
 
-## Available CLIs
-
-All CLIs are on PATH. Use bash to run them.
-
-**og** — Sourcegraph code search across all Netflix repos
-```bash
-og ask --sources "What is <service>? What repo contains it?"   # agentic deep search (use for broad orientation)
-og ask --id <conv-id> "follow-up question"                     # continue a conversation
-og search "<term>" --lang java --json                          # exact code search
-og search "<ClassName>" --repo corp/<repo> --json              # scoped search
-og commits --repo corp/<repo> --after "2025-12-31" --json      # commit history
-```
-
-**cy** — Netflix data platform metadata (tables, workflows, catalogs)
-```bash
-cy mt <catalog.db.table> --json                  # table metadata (schema, ownership, freshness)
-cy mt <table> lineage --json                     # upstream/downstream lineage
-cy ms <query> --json                             # keyword table search
-cy md "natural language description" --json      # semantic table discovery
-cy mc <catalog.database> --json                  # catalog/database browse
-cy ow <workflow-id> --json                       # workflow overview
-cy ow <workflow-id> run --json                   # latest run detail
-cy ow <workflow-id> definition --json            # workflow YAML definition
-```
-
-**ta** — Team and GitHub repo activity
-```bash
-ta team <manager-email> --json                   # team repo activity (30d default)
-ta team <manager-email> --days 90 --json         # longer window
-ta person <email> --json                         # individual commit history
-```
-
-**wp** — People directory + org hierarchy
-```bash
-wp <name-or-email>                               # profile + manager chain
-```
-
 ## Key local repos (already cloned — do NOT re-clone)
 
 | Path | What it is |
