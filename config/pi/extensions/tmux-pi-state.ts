@@ -43,11 +43,14 @@ export default function (pi: ExtensionAPI) {
 
   function setPill(color: string): void {
     try {
-      execSync(
-        `tmux set-window-option -t ${windowId} window-status-format ${JSON.stringify(pillFmt(color))}` +
-        ` && tmux refresh-client -S`,
-        { stdio: "ignore" }
-      );
+      const fmt = JSON.stringify(pillFmt(color));
+      // For subagent windows, override both formats so the icon stays correct
+      // whether or not the window is focused (tmux uses current-format when active).
+      const cmds = isSubagent
+        ? `tmux set-window-option -t ${windowId} window-status-format ${fmt}` +
+          ` && tmux set-window-option -t ${windowId} window-status-current-format ${fmt}`
+        : `tmux set-window-option -t ${windowId} window-status-format ${fmt}`;
+      execSync(cmds + ` && tmux refresh-client -S`, { stdio: "ignore" });
     } catch {
       // Silently ignore — tmux pane may have closed.
     }
@@ -55,11 +58,11 @@ export default function (pi: ExtensionAPI) {
 
   function revertPill(): void {
     try {
-      execSync(
-        `tmux set-window-option -ut ${windowId} window-status-format 2>/dev/null || true` +
-        ` ; tmux refresh-client -S`,
-        { stdio: "ignore" }
-      );
+      const cmds = isSubagent
+        ? `tmux set-window-option -ut ${windowId} window-status-format 2>/dev/null || true` +
+          ` ; tmux set-window-option -ut ${windowId} window-status-current-format 2>/dev/null || true`
+        : `tmux set-window-option -ut ${windowId} window-status-format 2>/dev/null || true`;
+      execSync(cmds + ` ; tmux refresh-client -S`, { stdio: "ignore" });
     } catch {
       // Silently ignore.
     }
