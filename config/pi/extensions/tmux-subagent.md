@@ -28,7 +28,7 @@ launch_agent tool                        pi -e <tmpBase>.ts   (a generated exten
   state file every tick;                   turn_end      → write "running" + live usage
   fs.watch fires instantly                 guardrails prompted → write "stopped"(+ctx)
                                            agent_end     → write "done"(+output,usage)
-  agent_reply / inbox     ───── .inbox.txt ──▶ poll inbox → sendUserMessage()
+  agent_reply / inbox     ───── .inbox.txt ──▶ poll inbox → sendUserMessage(deliverAs)
 ```
 
 The child is a **completely ordinary `pi` session**. The only special thing is
@@ -44,7 +44,7 @@ memory and no socket — coordination is **file-based IPC** in `os.tmpdir()`.
 |------|-----------|---------|
 | `{tmpBase}.ts` | parent → child | the generated child extension; passed as `pi -e`. Parent unlinks it on finish. |
 | `{tmpBase}.state.json` | child → parent | `{status, output?, reason?, prompt?, model?, usage?}`. The parent polls every 1s; `fs.watch` fires on each write for instant widget updates. |
-| `{tmpBase}.inbox.txt` | parent → child | a queued user message; child injects it via `sendUserMessage` then deletes the file. |
+| `{tmpBase}.inbox.txt` | parent → child | a plain text message written by `agent_reply`; child injects it via `sendUserMessage({ deliverAs: "steer" })` then deletes the file. |
 
 ### State machine (`status` in `.state.json`)
 
@@ -161,7 +161,8 @@ two response paths never fight.
    (`%N`) are not valid targets for `tmux select-window`. The code always calls
    `windowForPane(agent.paneId)` to get a fresh `session:index` first, then
    falls back to `agent.windowTarget` if the lookup fails.
-7. **`StringEnum` instead of `Type.Union([Type.Literal(...)])`** — the `mode`
+7. **`agent_reply` hardcodes `deliverAs: "steer"`** — delivers the message after current tool calls finish, before the next LLM call. `"followUp"` (wait until agent is fully idle) is useless here because subagents always terminate after completing their work — there is no idle-but-alive state, so the message would always miss the window. The option name is `deliverAs` (not `streamingBehavior`, which is a separate input-event field).
+8. **`StringEnum` instead of `Type.Union([Type.Literal(...)])`** — the `mode`
    and `model` parameters use `StringEnum` from `@earendil-works/pi-ai` so the
    tool schema works with Google models as the parent session's model.
 8. **Live usage vs. final usage differ in meaning.** The widget card during the

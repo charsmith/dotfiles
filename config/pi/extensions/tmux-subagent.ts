@@ -649,8 +649,7 @@ export default function (pi: ExtensionAPI) {
       ] as const, {
         description:
           "Model to use for the agent. Defaults to the current session model. " +
-          "Use a cheaper/faster model (haiku, sonnet) for straightforward tasks " +
-          "and a more capable one (opus) for complex reasoning.",
+          "Do not specify unless explicitly asked by the user.",
       })),
     }),
 
@@ -808,7 +807,7 @@ export default function (pi: ExtensionAPI) {
       const msg = readFileSync(${JSON.stringify(inboxFile)}, "utf-8").trim();
       if (msg) {
         unlinkSync(${JSON.stringify(inboxFile)});
-        pi.sendUserMessage(msg);
+        pi.sendUserMessage(msg, { deliverAs: "steer" });
       }
     } catch {}
   }, 1000);
@@ -970,7 +969,7 @@ export default function (pi: ExtensionAPI) {
     description: "Inject a follow-up user message into a running or stopped background agent (by id from launch_agent). Use it to add instructions or context. It cannot dismiss a guardrails permission prompt or an interactive question — those must be answered by switching to the agent's tmux window. Only works while the agent is still active; once it finishes, its window closes. NOTE: only available to the top-level session — subagents cannot use this tool.",
     promptSnippet: "Send a follow-up message to a running/stopped background subagent",
     parameters: Type.Object({
-      id: Type.String({ description: "Agent ID from launch_agent" }),
+      id: Type.String({ description: "Agent ID from launch_agent, or the tmux window target shown in the widget (e.g. '0:9')" }),
       message: Type.String({ description: "Message to send to the agent" }),
     }),
 
@@ -984,7 +983,8 @@ export default function (pi: ExtensionAPI) {
         };
       }
 
-      const agent = agents.get(params.id);
+      const agent = agents.get(params.id)
+        ?? [...agents.values()].find(a => a.windowTarget === params.id);
 
       if (!agent) {
         return {

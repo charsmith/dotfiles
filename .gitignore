@@ -7,3 +7,5 @@ config/tmux/plugins
 config/bash/locals/*.local.sh
 # Pi models config contains machine-specific proxy URLs
 config/pi/models.json
+# Skills are symlinks to other repos — not managed here
+config/pi/skills/
