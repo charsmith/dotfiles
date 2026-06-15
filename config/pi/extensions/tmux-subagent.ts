@@ -42,6 +42,10 @@
  *   skills: "*"         — load all global skills (skip --no-skills)
  *   skills omitted      — no skills
  *
+ * Spawn policy: subagents cannot launch further agents by default (PI_SUBAGENT blocks).
+ *   spawn_agents: true  — sets PI_AGENT_SPAWN=1, overriding the block for one level.
+ *   Children of a spawn_agents agent do NOT inherit PI_AGENT_SPAWN — nesting stops at 1.
+ *
  * See tmux-subagent.md (next to this file) for the full architecture: the
  * file-based IPC, the stop/approval flow, window tracking, and the gotchas.
  */
@@ -59,6 +63,7 @@ interface AgentDef {
   description: string;
   tools: string;        // comma-separated tool list, or "" for default
   skills: string;       // comma-separated skill names, "*" for all globals, or "" for none
+  spawnAgents: boolean; // whether this agent can launch further subagents
   systemPrompt: string;
 }
 
@@ -102,6 +107,7 @@ function loadAgentDef(agentName: string): AgentDef | null {
         description: frontmatter.description || "",
         tools: frontmatter.tools || "",
         skills: frontmatter.skills?.trim() || "",
+        spawnAgents: frontmatter.spawn_agents?.trim() === "true",
         systemPrompt: match[2].trim(),
       };
     } catch { continue; }
@@ -695,9 +701,10 @@ export default function (pi: ExtensionAPI) {
       "or an interactive question) it pauses and you respond by switching to its",
       "tmux window. For plain follow-up instructions to a running/stopped",
       "background agent you can also use agent_reply. NOTE: this tool is only",
-      "available to the top-level session. Subagents cannot launch further agents.",
+      "available to the top-level session and subagents with spawn_agents: true",
+      "in their agent definition.",
       "agent (optional): name of an agent definition from ~/.config/pi/agents/<name>.md",
-      "— applies that agent's system prompt and tool restrictions to the session.",
+      "— applies that agent's system prompt, tool restrictions, skills, and spawn policy.",
     ].join(" "),
     promptSnippet: "Launch a subagent in a tmux window (blocking or background)",
     parameters: Type.Object({
@@ -728,9 +735,9 @@ export default function (pi: ExtensionAPI) {
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       latestCtx = ctx;
 
-      if (process.env.PI_SUBAGENT) {
+      if (process.env.PI_SUBAGENT && !process.env.PI_AGENT_SPAWN) {
         return {
-          content: [{ type: "text", text: "Error: subagents are not allowed to launch other agents." }],
+          content: [{ type: "text", text: "Error: this subagent is not configured to launch further agents. Set spawn_agents: true in the agent definition." }],
           details: {}, isError: true,
         };
       }
@@ -942,7 +949,10 @@ export default function (pi: ExtensionAPI) {
         const piDir   = process.env.PI_CODING_AGENT_DIR ?? "";
         // PI_SUBAGENT tells tmux-window-name.ts not to rename this window to the
         // cwd basename — the launcher owns the name (pi:<name>).
+        // PI_AGENT_SPAWN allows the child to spawn further subagents (one level only —
+        // children spawned by this agent will NOT inherit PI_AGENT_SPAWN).
         const envArgs = ["-e", "PI_SUBAGENT=1"];
+        if (agentDef?.spawnAgents) envArgs.push("-e", "PI_AGENT_SPAWN=1");
         if (piDir) envArgs.push("-e", `PI_CODING_AGENT_DIR=${piDir}`);
         // Pass provider API keys from the parent's environment — the parent
         // already has them sourced from Keychain; a child login shell may not.
@@ -1097,9 +1107,9 @@ export default function (pi: ExtensionAPI) {
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       latestCtx = ctx;
 
-      if (process.env.PI_SUBAGENT) {
+      if (process.env.PI_SUBAGENT && !process.env.PI_AGENT_SPAWN) {
         return {
-          content: [{ type: "text", text: "Error: subagents are not allowed to use agent_reply." }],
+          content: [{ type: "text", text: "Error: this subagent is not configured to use agent_reply." }],
           details: {}, isError: true,
         };
       }
