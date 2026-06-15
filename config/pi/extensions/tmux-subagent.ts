@@ -968,7 +968,8 @@ export default function (pi: ExtensionAPI) {
 
         // Tool restrictions from the agent definition
         const toolArgs: string[] = [];
-        if (agentDef?.tools) toolArgs.push("--tools", agentDef.tools);
+        const toolList = agentDef?.tools;
+        if (toolList && toolList !== "all") toolArgs.push("--tools", toolList);
 
         // Skills policy:
         //   - Default (no agent, or agent with no skills field): --no-skills
