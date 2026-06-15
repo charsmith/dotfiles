@@ -1,7 +1,6 @@
 ---
 name: dp-researcher
 description: Researches Netflix data platform services — reads existing knowledge base, follows the established research workflow, writes findings back
-tools: all
 skills: og,cy,ta,wp
 spawn_agents: true
 ---
