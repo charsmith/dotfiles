@@ -4,7 +4,12 @@ return {
   opts = {},
   dependencies = {
     "MunifTanjim/nui.nvim",
-    "rcarriga/nvim-notify",
+    {
+      "rcarriga/nvim-notify",
+      opts = {
+        background_colour = "#1e1e2e", -- catppuccin mocha base
+      },
+    },
   },
   config = function()
     require("noice").setup({
