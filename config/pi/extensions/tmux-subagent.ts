@@ -94,12 +94,17 @@ function loadAgentDef(agentName: string): AgentDef | null {
     if (!existsSync(filePath)) continue;
     try {
       const raw = readFileSync(filePath, "utf-8");
-      const match = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+      // \r?\n so frontmatter parses regardless of LF / CRLF line endings.
+      const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
       if (!match) continue;
+      // Strip a single pair of surrounding quotes — the docs show quoted forms
+      // (skills: "*", skills: "og,cy") and unstripped quotes silently break the
+      // skills/tools parsing downstream.
+      const stripQuotes = (v: string) => v.replace(/^["']|["']$/g, "").trim();
       const frontmatter: Record<string, string> = {};
-      for (const line of match[1].split("\n")) {
+      for (const line of match[1].split(/\r?\n/)) {
         const idx = line.indexOf(":");
-        if (idx > 0) frontmatter[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+        if (idx > 0) frontmatter[line.slice(0, idx).trim()] = stripQuotes(line.slice(idx + 1).trim());
       }
       if (!frontmatter.name) continue;
       return {
@@ -922,7 +927,8 @@ export default function (pi: ExtensionAPI) {
 
       writeFileSync(tmpExtPath, finalExtSource, { mode: 0o600 });
       // Pre-create state file so fs.watch has a target before the child writes.
-      writeFileSync(stateFile, JSON.stringify({ status: "running" }), "utf-8");
+      // 0o600 — state/inbox files carry task text + agent output in a shared tmp dir.
+      writeFileSync(stateFile, JSON.stringify({ status: "running" }), { mode: 0o600 });
 
       // ── Spawn tmux window ─────────────────────────────────────────────
       let windowTarget: string;
@@ -1129,7 +1135,7 @@ export default function (pi: ExtensionAPI) {
         };
       }
 
-      writeFileSync(agent.inboxFile, params.message, "utf-8");
+      writeFileSync(agent.inboxFile, params.message, { mode: 0o600 });
 
       // Flip back to running so the widget updates
       if (agent.status === "stopped") {
