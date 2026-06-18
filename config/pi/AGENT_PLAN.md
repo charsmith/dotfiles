@@ -75,7 +75,16 @@ This works today with `tmux-subagent.ts`. No new code needed for Phase 1.
 
 ---
 
-## Phase 2 — Agent Chain (`pi-chain.ts`)
+## Phase 2 — Agent Chain (`pi-chain.ts`)  ✅ DONE (+ persistent teams)
+
+> **Status:** built and verified. `run_chain` tool, YAML chains, and the flow
+> widget all work. Extended beyond the original one-shot design with **persistent
+> teams**: `persist` (keep agents warm between runs) and `clearContext` (fresh
+> per-topic vs. context accumulated across topics) — a `persist:true` +
+> `clearContext:false` chain is a *linear persistent team*. Per-topic completion
+> is detected via a monotonic `seq` counter in `lib/agent-spawn.ts`. See
+> `CHAIN_BUILD_PLAN.md` (Steps 1–4 + 4.5 + 6) and the `pi-chain.md` design doc.
+> Remaining: Phase 3 (dp-synthesizer + real dp-research chain).
 
 ### Architecture
 
@@ -192,7 +201,15 @@ dp-research:
 
 ---
 
-## Phase 4 — Agent Team (`pi-team.ts`)
+## Phase 4 — Agent Team
+
+> **Status:** the *messaging* substrate is built — `coms-bus.ts` (peer-to-peer
+> bus) + `tmux-subagent.ts`'s `team` launch mode give persistent, addressable
+> team members **imperatively** (`launch_agent(team:...)`). Still **not done**:
+> declarative teams from a `teams.yaml` (`kind: team` + `members:`) and a
+> `run_team` dispatch / grid dashboard. `pi-chain.ts`'s `loadChains` deliberately
+> ignores any non-`kind:chain` block, so the `kind:` discriminator seam is in
+> place for this. Tracked as Step 7 in `CHAIN_BUILD_PLAN.md`.
 
 Grid dashboard. Dispatcher-only orchestrator. Good for parallel work where order
 doesn't matter (e.g., research multiple topics simultaneously, or different specialists
@@ -249,13 +266,17 @@ Once the agent is running regularly, evolve it:
     tmux-pi-state.ts          ✓ done
     tmux-subagent.ts          ✓ done
     tmux-window-name.ts       ✓ done
-    pi-chain.ts               phase 2
-    pi-team.ts                phase 4
+    coms-bus.ts               ✓ done (messaging substrate; imperative teams)
+    pi-chain.ts               ✓ done (phase 2 + persistent teams)
+    pi-chain.md               ✓ done (design doc)
+    lib/agent-spawn.ts        ✓ done (shared spawn/IPC primitive)
+    lib/mini-yaml.ts          ✓ done (YAML subset parser)
+    pi-team.ts                phase 4 — declarative teams.yaml / grid (not started)
   agents/
-    dp-researcher.md          phase 1
-    dp-synthesizer.md         phase 3
-    agent-chain.yaml          phase 2
-    teams.yaml                phase 4
+    dp-researcher.md          ✓ done (phase 1)
+    dp-synthesizer.md         phase 3 (not started)
+    agent-chain.yaml          ✓ done (phase 2; incl. pitch-lab + pitch-lab-live)
+    teams.yaml                phase 4 (not started)
   skills/ → (gitignored, symlinks to other repos)
   settings.json
   guardrails.json
@@ -265,9 +286,12 @@ Once the agent is running regularly, evolve it:
 
 ## Immediate Next Actions
 
-1. **Create `~/.config/pi/agents/dp-researcher.md`** — write the agent definition
-2. **Create knowledge base structure** — mkdir + README.md scaffold
-3. **Test standalone** via `launch_agent` in the current session — iterate until quality is good
-4. **Extract IPC utility** from `tmux-subagent.ts` in prep for `pi-chain.ts`
-5. **Build `pi-chain.ts`** — flow widget + chain orchestration
-6. **Wire dp-research chain** — chain.yaml + dp-synthesizer.md
+1. ~~Create `~/.config/pi/agents/dp-researcher.md`~~ ✅ done
+2. ~~Create knowledge base structure~~ ✅ done
+3. ~~Test standalone via `launch_agent`~~ ✅ done
+4. ~~Extract IPC utility (`lib/agent-spawn.ts`)~~ ✅ done
+5. ~~Build `pi-chain.ts` — flow widget + chain orchestration~~ ✅ done (+ persistent teams)
+6. **Restart-and-eyeball** the persistent-team work (`runPersistentStep`/`seq`,
+   `/chain-down`, `pitch-lab-live`) — implemented after the last live run.
+7. **Wire dp-research chain** — `agent-chain.yaml` `dp-research` entry + `dp-synthesizer.md` (Phase 3).
+8. **(Later) Declarative teams** — `kind: team` loader + `run_team` (Phase 4 / CHAIN_BUILD_PLAN Step 7).

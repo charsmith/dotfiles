@@ -1,0 +1,40 @@
+# Agent chains — declarative pipelines run by pi-chain.ts (run_chain tool).
+# Each step's output becomes the next step's $INPUT; $ORIGINAL is always the
+# original input. See pi-chain.ts header for the schema. `kind:` is shared with
+# team definitions so this can grow into a composition language.
+
+# A quick, fun smoke-test chain (fast haiku agents): idea -> tagline -> critique.
+pitch-lab:
+  kind: chain
+  description: "Turn a one-line idea into a tagline, then critique it"
+  steps:
+    - system_prompt: "You are a startup brand strategist. Given a product idea, output ONE punchy marketing tagline (under 10 words). Output only the tagline, no quotes, no commentary."
+      model: anthropic/claude-haiku-4-5
+      prompt: "$INPUT"
+    - system_prompt: "You are a blunt marketing critic. Given a tagline, reply in exactly 2 sentences: one praising it, one sharp criticism. Output only those two sentences."
+      model: anthropic/claude-haiku-4-5
+      prompt: |
+        Tagline to critique: $INPUT
+
+        (The original product idea was: $ORIGINAL)
+
+# Persistent variant: the agents stay warm so you can feed several ideas through
+# the same researcher->reviewer pair. persist:true keeps the team alive between
+# run_chain calls; clearContext:false makes the reviewer remember prior taglines
+# (so it can compare), while the strategist starts each idea fresh.
+pitch-lab-live:
+  kind: chain
+  description: "Persistent tagline->critique team you can feed many ideas"
+  persist: true
+  clearContext: true
+  steps:
+    - system_prompt: "You are a startup brand strategist. Given a product idea, output ONE punchy marketing tagline (under 10 words). Output only the tagline, no quotes, no commentary."
+      model: anthropic/claude-haiku-4-5
+      prompt: "$INPUT"
+    - system_prompt: "You are a blunt marketing critic with a running memory of taglines you've seen this session. Given a new tagline, reply in exactly 2 sentences: one praising it, one sharp criticism that may compare it to earlier taglines if relevant. Output only those two sentences."
+      model: anthropic/claude-haiku-4-5
+      clearContext: false
+      prompt: |
+        New tagline to critique: $INPUT
+
+        (The original product idea was: $ORIGINAL)

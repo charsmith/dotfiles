@@ -57,107 +57,35 @@
  * file-based IPC, the stop/approval flow, window tracking, and the gotchas.
  */
 
-import { execFileSync, execSync } from "node:child_process";
+import { execSync } from "node:child_process";
 import { existsSync, readFileSync, unlinkSync, watch, writeFileSync } from "node:fs";
 import type { FSWatcher } from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-
-// ─── Agent definition loader ────────────────────────────────────────────────
-
-interface AgentDef {
-  name: string;
-  description: string;
-  tools: string;        // comma-separated tool list, or "" for default
-  skills: string;       // comma-separated skill names, "*" for all globals, or "" for none
-  spawnAgents: boolean; // whether this agent can launch further subagents
-  systemPrompt: string;
-}
-
-// Skill search dirs — same locations pi discovers globally
-const SKILL_DIRS = [
-  path.join(os.homedir(), ".config", "pi", "skills"),
-  path.join(os.homedir(), ".pi", "agent", "skills"),
-];
-
-function resolveSkillPath(skillName: string): string | null {
-  for (const dir of SKILL_DIRS) {
-    const p = path.join(dir, skillName);
-    if (existsSync(path.join(p, "SKILL.md"))) return p;
-    // Also allow bare .md skills
-    const md = path.join(dir, `${skillName}.md`);
-    if (existsSync(md)) return md;
-  }
-  return null;
-}
-
-function loadAgentDef(agentName: string): AgentDef | null {
-  const searchDirs = [
-    path.join(os.homedir(), ".config", "pi", "agents"),
-    path.join(os.homedir(), ".pi", "agents"),
-  ];
-  for (const dir of searchDirs) {
-    const filePath = path.join(dir, `${agentName}.md`);
-    if (!existsSync(filePath)) continue;
-    try {
-      const raw = readFileSync(filePath, "utf-8");
-      // \r?\n so frontmatter parses regardless of LF / CRLF line endings.
-      const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
-      if (!match) continue;
-      // Strip a single pair of surrounding quotes — the docs show quoted forms
-      // (skills: "*", skills: "og,cy") and unstripped quotes silently break the
-      // skills/tools parsing downstream.
-      const stripQuotes = (v: string) => v.replace(/^["']|["']$/g, "").trim();
-      const frontmatter: Record<string, string> = {};
-      for (const line of match[1].split(/\r?\n/)) {
-        const idx = line.indexOf(":");
-        if (idx > 0) frontmatter[line.slice(0, idx).trim()] = stripQuotes(line.slice(idx + 1).trim());
-      }
-      if (!frontmatter.name) continue;
-      return {
-        name: frontmatter.name,
-        description: frontmatter.description || "",
-        tools: frontmatter.tools || "",
-        skills: frontmatter.skills?.trim() || "",
-        spawnAgents: frontmatter.spawn_agents?.trim() === "true",
-        systemPrompt: match[2].trim(),
-      };
-    } catch { continue; }
-  }
-  return null;
-}
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
-// ─── Types ─────────────────────────────────────────────────────────────────
+// Shared spawn/IPC primitive — the "one link" both this extension and
+// pi-chain.ts build on. See lib/agent-spawn.ts.
+import {
+  type AgentDef,
+  type AgentPrompt,
+  type AgentState,
+  type AgentUsage,
+  fmtElapsed,
+  fmtTokens,
+  fmtUsage,
+  isPaneAlive,
+  loadAgentDef,
+  sanitizeAgentName,
+  sendKeysToPane,
+  shortModelName,
+  spawnAgentWindow,
+  TmuxSpawnError,
+  windowForPane,
+} from "./lib/agent-spawn.ts";
 
-type AgentStatus = "running" | "stopped" | "done" | "error";
-
-interface AgentUsage {
-  turns: number;
-  input: number;
-  output: number;
-  cost: number;
-  elapsedMs: number;
-}
-
-interface AgentPrompt {
-  kind?: string;       // guardrails prompt kind ("confirmation" | "permission")
-  toolName?: string;   // tool the subagent was trying to run
-  path?: string;       // target path (path-access prompts)
-  reason?: string;     // human-readable reason
-}
-
-interface AgentState {
-  status: AgentStatus;
-  output?: string;
-  reason?: string;   // guardrails stop reason
-  prompt?: AgentPrompt;
-  model?: string;
-  usage?: AgentUsage;
-}
+// ─── Types (caller-specific) ─────────────────────────────────────────────────
 
 type AgentMode = "blocking" | "background" | "team";
 
@@ -192,30 +120,6 @@ interface ToolResultLike {
   isError?: boolean;
 }
 
-// ─── Formatting ────────────────────────────────────────────────────────────
-
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 10_000)    return `${Math.round(n / 1_000)}k`;
-  if (n >= 1_000)     return `${(n / 1_000).toFixed(1)}k`;
-  return `${n}`;
-}
-
-function fmtElapsed(ms: number): string {
-  const s = Math.floor(ms / 1000);
-  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
-}
-
-function fmtUsage(u: AgentUsage): string {
-  const parts: string[] = [];
-  if (u.turns)  parts.push(`${u.turns} turn${u.turns > 1 ? "s" : ""}`);
-  if (u.input)  parts.push(`↑${fmtTokens(u.input)}`);
-  if (u.output) parts.push(`↓${fmtTokens(u.output)}`);
-  if (u.cost)   parts.push(`$${u.cost.toFixed(3)}`);
-  parts.push(fmtElapsed(u.elapsedMs));
-  return parts.join("  ");
-}
-
 // ─── Extension ─────────────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
@@ -231,45 +135,9 @@ export default function (pi: ExtensionAPI) {
   let tickCount = 0;
   let currentModelLabel = "";   // updated on model_select; used in renderCall
 
-  // ── Model label ─────────────────────────────────────────────────────────
-
-  // Return a compact display label for a model string like "anthropic/claude-opus-4-5".
-  // Strips the provider prefix, then strips well-known model-family prefixes
-  // ("claude-", "gemini-", "gpt-") so we just see "opus-4-5", "2.0-flash", etc.
-  function shortModelName(modelStr: string): string {
-    // Strip "provider/" prefix
-    const slash = modelStr.indexOf("/");
-    let id = slash >= 0 ? modelStr.slice(slash + 1) : modelStr;
-    // Strip well-known family prefixes
-    for (const prefix of ["claude-", "gemini-", "gpt-"]) {
-      if (id.startsWith(prefix)) { id = id.slice(prefix.length); break; }
-    }
-    return id;
-  }
-
-  // ── Tmux helper ──────────────────────────────────────────────────────────
-
-  function currentTmuxSession(): string | null {
-    if (!process.env.TMUX) return null;
-    try {
-      return execSync("tmux display-message -p '#S'", {
-        encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"],
-      }).trim() || null;
-    } catch { return null; }
-  }
-
-  // Resolve the *current* session:window_index for a pane id. Window indices
-  // shift as windows open/close (esp. with renumber-windows), so the pane id
-  // (%N) is the only stable handle — always re-resolve from it.
-  function windowForPane(paneId: string): string | null {
-    if (!paneId) return null;
-    try {
-      return execSync(
-        `tmux display-message -p -t ${paneId} '#{session_name}:#{window_index}'`,
-        { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] },
-      ).trim() || null;
-    } catch { return null; }
-  }
+  // Model label, tmux session/pane helpers, and pane liveness now live in
+  // lib/agent-spawn.ts (shortModelName, currentTmuxSession, windowForPane,
+  // isPaneAlive, sendKeysToPane) — imported above.
 
   // ── State file watcher ───────────────────────────────────────────────────────────────────
   // Watch the state file for changes — fires instantly when the child writes
@@ -496,11 +364,6 @@ export default function (pi: ExtensionAPI) {
   // Only one inline parent dialog at a time.
   let parentDialogBusy = false;
 
-  function sendKeysToPane(paneId: string, key: string) {
-    if (!paneId) return;
-    try { execSync(`tmux send-keys -t ${paneId} ${key}`, { stdio: "ignore" }); } catch {}
-  }
-
   // Mark a paused agent as active again (after we drive its prompt). We also
   // overwrite the state file back to "running" — the child can't tell us its
   // modal closed, so without this the still-"stopped" file would re-fire the
@@ -667,21 +530,6 @@ export default function (pi: ExtensionAPI) {
     }, { deliverAs: "followUp", triggerTurn: true });
   }
 
-  // ── Pane liveness ───────────────────────────────────────────────────────
-
-  function isPaneAlive(paneId: string): boolean {
-    try {
-      const out = execSync('tmux list-panes -a -F "#{pane_id} #{pane_dead}"', {
-        encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"],
-      });
-      for (const line of out.trim().split("\n")) {
-        const [id, dead] = line.trim().split(" ");
-        if (id === paneId) return dead !== "1";
-      }
-      return false; // not found = gone
-    } catch { return false; }
-  }
-
   // ── Tick loop ────────────────────────────────────────────────────────────
 
   function startTicking() {
@@ -773,163 +621,8 @@ export default function (pi: ExtensionAPI) {
       const isTeam = typeof params.team === "string" && params.team.trim().length > 0;
       const effectiveMode: AgentMode = isTeam ? "team" : mode;
 
-      const session = currentTmuxSession();
-      if (!session) {
-        return {
-          content: [{ type: "text", text: "Error: launch_agent requires pi to be running inside a tmux session." }],
-          details: {}, isError: true,
-        };
-      }
-
-      const safeName = (
-        params.name.replace(/[^a-zA-Z0-9_-]/g, "-").replace(/-+/g, "-")
-          .replace(/^-|-$/g, "").slice(0, 20) || "agent"
-      );
-      const windowName = `pi:${safeName}`;
-
-      // ── Temp files ────────────────────────────────────────────────────
-      const timestamp = Date.now();
-      const id        = `${timestamp}-${Math.random().toString(36).slice(2, 6)}`;
-      const tmpBase   = path.join(os.tmpdir(), `pi-agent-${timestamp}`);
-      const tmpExtPath  = `${tmpBase}.ts`;
-      const stateFile   = `${tmpBase}.state.json`;
-      const inboxFile   = `${tmpBase}.inbox.txt`;
-
-
-      // ── Temp extension ────────────────────────────────────────────────
-      //
-      // Runs in the child pi process. Responsibilities:
-      //   1. Send the initial task as the first user message
-      //   2. On guardrails permission prompt → write transient "stopped" state
-      //      (agent is paused waiting for in-window input)
-      //   3. On agent_end → write "done" with output + usage (the run is over,
-      //      regardless of any earlier guardrails pause that the human cleared)
-      //   4. Poll inbox.txt every 1s → inject parent messages via sendUserMessage
-      //
-      const tmpExtSource = `
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-export default function (pi: ExtensionAPI) {
-  let fired = false;
-  // PERSISTENT (team) members never write "done" — they stay alive to keep
-  // servicing coms messages; the parent finishes them only when the pane dies.
-  const PERSISTENT = ${isTeam ? "true" : "false"};
-  const startedAt = Date.now();
-  let modelId = "";
-  let contextTokens = 0, totalOutput = 0, totalCost = 0, totalTurns = 0;
-  let sessionCtx: any = null;
-
-  // extFile cleaned up by parent (pi watches -e files; self-deletion unloads the extension)
-
-  const writeState = (data: object) => {
-    try { writeFileSync(${JSON.stringify(stateFile)}, JSON.stringify(data), "utf-8"); } catch {}
-  };
-
-  pi.on("model_select", (event) => {
-    modelId = event.model.id;
-  });
-
-  pi.on("session_start", (_event, ctx) => {
-    sessionCtx = ctx;
-    if (fired) return;
-    fired = true;
-    writeState({ status: "running" });
-    pi.sendUserMessage(${JSON.stringify(params.task)});
-  });
-
-  // Each turn starting means the run is active (e.g. resuming after the human
-  // cleared a guardrails prompt) — clear any transient "stopped" state.
-  pi.on("turn_start", () => {
-    writeState({ status: "running", model: modelId || undefined });
-  });
-
-  // After each turn, snapshot the live context-window size (same source as the
-  // footer status bar) and accumulate output tokens + cost. Written to the state
-  // file so the parent widget card shows live counters while the agent runs.
-  pi.on("turn_end", (event) => {
-    const m = (event as any).message;
-    // Snapshot — not a running sum. getContextUsage().tokens computes
-    // totalTokens || (input + output + cacheRead + cacheWrite), matching the footer.
-    contextTokens  = sessionCtx?.getContextUsage()?.tokens ?? 0;
-    totalOutput   += m?.usage?.output      ?? 0;
-    totalCost     += m?.usage?.cost?.total ?? 0;
-    if (!modelId && m?.model) modelId = m.model;
-    totalTurns++;
-    writeState({
-      status: "running",
-      model: modelId || undefined,
-      usage: { turns: totalTurns, input: contextTokens, output: totalOutput, cost: totalCost, elapsedMs: Date.now() - startedAt },
-    });
-  });
-
-
-  // Guardrails is showing a permission prompt (ask mode) — the agent run is
-  // paused waiting for the human to respond in this window. Write a transient
-  // "stopped" state purely so the parent can flag it / notify. The next
-  // agent_end (after the human responds, here or in-window) overwrites it with
-  // "done", so resolving the prompt directly in the window works correctly.
-  pi.events.on("guardrails:action:prompted", (payload: any) => {
-    const reason = payload?.reason ?? "guardrails needs permission";
-    writeState({
-      status: "stopped",
-      reason: "Guardrails needs permission: " + reason,
-      prompt: {
-        kind: payload?.prompt?.kind,
-        toolName: payload?.context?.toolName,
-        path: payload?.action?.path ?? payload?.action?.displayPath,
-        reason: reason,
-      },
-      model: modelId || undefined,
-    });
-  });
-
-  // Agent run finished — always write "done" with output + usage. agent_end
-  // fires once the whole run completes (after any guardrails pause the human
-  // already cleared), so it is the authoritative "task is over" signal.
-  pi.on("agent_end", (event, ctx) => {
-    // Reuse the accumulators from turn_end — consistent with the live widget stats.
-    // Take a final getContextUsage() snapshot for input (same as the footer).
-    const input = ctx.getContextUsage()?.tokens ?? contextTokens;
-    let finalOutput = "";
-    for (let i = event.messages.length - 1; i >= 0; i--) {
-      const msg = event.messages[i];
-      if (msg.role === "assistant") {
-        for (const part of msg.content) {
-          if (part.type === "text" && part.text) { finalOutput = part.text; break; }
-        }
-        if (finalOutput) break;
-      }
-    }
-
-    writeState({
-      status: PERSISTENT ? "running" : "done",
-      output: finalOutput || "(no output)",
-      model: modelId || undefined,
-      usage: { turns: totalTurns, input, output: totalOutput, cost: totalCost, elapsedMs: Date.now() - startedAt },
-    });
-  });
-
-  // Poll inbox.txt for messages from the parent thread (agent_reply / background
-  // follow-ups). Injecting a message starts a fresh run → another agent_end →
-  // another "done" write, so the parent stays in sync.
-  const inboxInterval = setInterval(() => {
-    if (!existsSync(${JSON.stringify(inboxFile)})) return;
-    try {
-      const msg = readFileSync(${JSON.stringify(inboxFile)}, "utf-8").trim();
-      if (msg) {
-        unlinkSync(${JSON.stringify(inboxFile)});
-        pi.sendUserMessage(msg, { deliverAs: "steer" });
-      }
-    } catch {}
-  }, 1000);
-
-  pi.on("session_shutdown", () => clearInterval(inboxInterval));
-}
-`.trimStart();
-
-      // ── Agent definition: inject system prompt into child extension ───
+      // Load the agent definition first so a bad name errors before we spawn.
       let agentDef: AgentDef | null = null;
-      let finalExtSource = tmpExtSource;
       if (params.agent) {
         agentDef = loadAgentDef(params.agent);
         if (!agentDef) {
@@ -939,149 +632,50 @@ export default function (pi: ExtensionAPI) {
           };
         }
       }
-      // Persona: inline system_prompt wins, else the agent def's system prompt.
-      // Injected via a before_agent_start hook spliced before the final brace.
-      const personaPrompt = (params.system_prompt && params.system_prompt.trim()) || agentDef?.systemPrompt || "";
-      if (personaPrompt) {
-        const hookCode = `
-  pi.on("before_agent_start", async (_event, _ctx) => {
-    return { systemPrompt: ${JSON.stringify(personaPrompt)} };
-  });
-`;
-        const lastBrace = finalExtSource.lastIndexOf("\n}");
-        if (lastBrace !== -1) {
-          finalExtSource = finalExtSource.slice(0, lastBrace) + hookCode + "\n}";
-        }
+
+      // Team members auto-join the coms-bus via env vars (coms-bus.ts activates
+      // on PI_COMS_PROJECT/PI_COMS_CNAME). The cname must match the window's
+      // safeName, so derive both with the shared sanitizeAgentName().
+      const safeName = sanitizeAgentName(params.name);
+      const extraEnv: Record<string, string> = {};
+      if (isTeam) {
+        extraEnv.PI_COMS_PROJECT = params.team!;
+        extraEnv.PI_COMS_CNAME   = safeName;
+        const purpose = (agentDef?.description || params.system_prompt || "").replace(/[\r\n\t]+/g, " ").trim().slice(0, 100);
+        if (purpose) extraEnv.PI_COMS_PURPOSE = purpose;
+        // Propagate a custom bus dir (tests/non-default) to the child.
+        if (process.env.PI_COMS_BUS_DIR) extraEnv.PI_COMS_BUS_DIR = process.env.PI_COMS_BUS_DIR;
       }
 
-      writeFileSync(tmpExtPath, finalExtSource, { mode: 0o600 });
-      // Pre-create state file so fs.watch has a target before the child writes.
-      // 0o600 — state/inbox files carry task text + agent output in a shared tmp dir.
-      writeFileSync(stateFile, JSON.stringify({ status: "running" }), { mode: 0o600 });
-
-      // ── Spawn tmux window ─────────────────────────────────────────────
-      let windowTarget: string;
-      let paneId: string;
-
-      // Resolve the model to use: explicit param > current session model.
-      // Parse "provider/model-id" or bare "model-id" from the param.
-      let agentProvider: string | undefined;
-      let agentModelId: string | undefined;
-      if (params.model) {
-        const slash = params.model.indexOf("/");
-        if (slash > 0) {
-          agentProvider = params.model.slice(0, slash);
-          agentModelId  = params.model.slice(slash + 1);
-        } else {
-          agentModelId = params.model;
-        }
-      } else if (ctx.model) {
-        agentProvider = ctx.model.provider;
-        agentModelId  = ctx.model.id;
-      }
-
+      // Spawn the window + wire the IPC via the shared "one link" primitive.
+      let handle;
       try {
-        const piDir   = process.env.PI_CODING_AGENT_DIR ?? "";
-        // PI_SUBAGENT tells tmux-window-name.ts not to rename this window to the
-        // cwd basename — the launcher owns the name (pi:<name>).
-        // PI_AGENT_SPAWN allows the child to spawn further subagents (one level only —
-        // children spawned by this agent will NOT inherit PI_AGENT_SPAWN).
-        const envArgs = ["-e", "PI_SUBAGENT=1"];
-        if (agentDef?.spawnAgents) envArgs.push("-e", "PI_AGENT_SPAWN=1");
-        if (piDir) envArgs.push("-e", `PI_CODING_AGENT_DIR=${piDir}`);
-        // Team members auto-join the coms-bus: these env vars opt coms-bus.ts in
-        // (it auto-loads globally and activates on PI_COMS_PROJECT/PI_COMS_CNAME).
-        if (isTeam) {
-          envArgs.push("-e", `PI_COMS_PROJECT=${params.team}`);
-          envArgs.push("-e", `PI_COMS_CNAME=${safeName}`);
-          const purpose = (agentDef?.description || params.system_prompt || "").replace(/[\r\n\t]+/g, " ").trim().slice(0, 100);
-          if (purpose) envArgs.push("-e", `PI_COMS_PURPOSE=${purpose}`);
-          // Propagate a custom bus dir (tests/non-default) to the child.
-          if (process.env.PI_COMS_BUS_DIR) envArgs.push("-e", `PI_COMS_BUS_DIR=${process.env.PI_COMS_BUS_DIR}`);
-        }
-        // Pass provider API keys from the parent's environment — the parent
-        // already has them sourced from Keychain; a child login shell may not.
-        for (const key of Object.keys(process.env)) {
-          if (/^(ANTHROPIC|OPENAI|GEMINI|GOOGLE|XAI)_/i.test(key) && process.env[key]) {
-            envArgs.push("-e", `${key}=${process.env[key]}`);
-          }
-        }
-
-        const modelArgs: string[] = [];
-        if (agentProvider) modelArgs.push("--provider", agentProvider);
-        if (agentModelId)  modelArgs.push("--model",    agentModelId);
-
-        // Tool restrictions from the agent definition
-        const toolArgs: string[] = [];
-        const toolList = agentDef?.tools;
-        if (toolList === "none") {
-          toolArgs.push("--no-tools");
-        } else if (toolList && toolList !== "all") {
-          toolArgs.push("--tools", toolList);
-        }
-
-        // Skills policy:
-        //   - Default (no agent, or agent with no skills field): --no-skills
-        //   - Agent with skills: "*": load all global skills (no --no-skills)
-        //   - Agent with skills: "og,cy,...": --no-skills + --skill <path> per named skill
-        const skillArgs: string[] = [];
-        const agentSkills = agentDef?.skills ?? "";
-        if (agentSkills === "*") {
-          // load all global skills — omit --no-skills
-        } else {
-          skillArgs.push("--no-skills");
-          if (agentSkills) {
-            for (const skillName of agentSkills.split(",").map(s => s.trim()).filter(Boolean)) {
-              const skillPath = resolveSkillPath(skillName);
-              if (skillPath) {
-                skillArgs.push("--skill", skillPath);
-              }
-            }
-          }
-        }
-
-        const raw = execFileSync("tmux", [
-          "new-window", "-d",
-          "-n", windowName,
-          "-P", "-F", "#{session_name}:#{window_index}\t#{pane_id}",
-          ...envArgs,
-          "--", "pi", "-e", tmpExtPath, ...modelArgs, ...toolArgs, ...skillArgs,
-        ], { encoding: "utf-8" }).trim();
-
-        const [wt, pd] = raw.split("\t");
-        windowTarget = wt ?? `${session}:?`;
-        paneId       = pd ?? "";
+        handle = spawnAgentWindow({
+          name: params.name,
+          task: params.task,
+          persistent: isTeam,
+          model: params.model,
+          sessionModel: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
+          agentDef,
+          systemPrompt: params.system_prompt,
+          extraEnv,
+        });
       } catch (err: any) {
-        try { unlinkSync(tmpExtPath); } catch {}
-        return {
-          content: [{ type: "text", text: `Failed to create tmux window: ${(err as Error).message}` }],
-          details: {}, isError: true,
-        };
+        const text = err instanceof TmuxSpawnError
+          ? `Error: launch_agent ${err.message}`
+          : `Error: failed to launch agent: ${(err as Error).message}`;
+        return { content: [{ type: "text", text }], details: {}, isError: true };
       }
 
-      // Lock the window name: PI_SUBAGENT stops tmux-window-name.ts, and the two
-      // window options stop tmux's own escape-sequence / command-based renames.
-      // @pi_subagent is read by window-icon.sh to show the subagent icon.
-      // Target via the stable pane id (window index may shift later).
-      try {
-        execSync(`tmux set-window-option -t ${paneId} allow-rename off`, { stdio: "ignore" });
-        execSync(`tmux set-window-option -t ${paneId} automatic-rename off`, { stdio: "ignore" });
-        execSync(`tmux set-window-option -t ${paneId} @pi_subagent 1`, { stdio: "ignore" });
-      } catch {}
-
-      // ── Register + start ticking ──────────────────────────────────────
-      // Build a display label for the widget card from the resolved model.
-      const launchModelLabel = agentProvider && agentModelId
-        ? shortModelName(`${agentProvider}/${agentModelId}`)
-        : agentModelId ? shortModelName(agentModelId) : undefined;
+      const { id, windowName, windowTarget, paneId, extFile, stateFile, inboxFile, startedAt } = handle;
 
       const agent: AgentEntry = {
         id, name: params.name, windowName,
         task: isTeam ? `[team:${params.team}] ${params.task}` : params.task,
         mode: effectiveMode,
-        windowTarget, paneId, extFile: tmpExtPath, stateFile, inboxFile,
-        status: "running", startedAt: timestamp,
-        model: launchModelLabel,
+        windowTarget, paneId, extFile, stateFile, inboxFile,
+        status: "running", startedAt,
+        model: handle.modelLabel,
       };
       agents.set(id, agent);
 
