@@ -30,8 +30,15 @@
  *   │ truncated task text…                                 │
  *   └──────────────────────────────────────────────────────┘
  *
- * Tools:   launch_agent (task, mode, model, agent), agent_reply
+ * Tools:   launch_agent (task, mode, model, agent, team, system_prompt), agent_reply
  * Commands: /agents, /agents-clear
+ *
+ * Team members (team="<project>"): launched as PERSISTENT coms-bus members
+ * (coms-bus.ts auto-joins via PI_COMS_PROJECT/PI_COMS_CNAME env). They are NOT
+ * killed when their first turn ends — `task` is a plain warm-up message and they
+ * stay alive to service coms_send/coms_broadcast, addressable by `name`. The
+ * parent finishes them only when the pane dies (exit / coms_shutdown / window
+ * close). system_prompt="..." sets an inline persona (alternative to `agent`).
  *
  * Agent definitions live in ~/.config/pi/agents/<name>.md — YAML frontmatter
  * (name, description, tools, skills) + system prompt body. Pass agent=<name> to
@@ -152,7 +159,7 @@ interface AgentState {
   usage?: AgentUsage;
 }
 
-type AgentMode = "blocking" | "background";
+type AgentMode = "blocking" | "background" | "team";
 
 interface AgentEntry {
   id: string;
@@ -710,6 +717,11 @@ export default function (pi: ExtensionAPI) {
       "in their agent definition.",
       "agent (optional): name of an agent definition from ~/.config/pi/agents/<name>.md",
       "— applies that agent's system prompt, tool restrictions, skills, and spawn policy.",
+      "team (optional): launch as a PERSISTENT coms-bus member of this team (project).",
+      "The agent stays alive (it is not killed when its first turn ends) and is",
+      "addressable by `name` via coms_send / coms_broadcast. `task` becomes a plain",
+      "warm-up message. system_prompt (optional): an inline persona/system prompt,",
+      "an alternative to `agent` for ad-hoc personas.",
     ].join(" "),
     promptSnippet: "Launch a subagent in a tmux window (blocking or background)",
     parameters: Type.Object({
@@ -735,6 +747,14 @@ export default function (pi: ExtensionAPI) {
           "Agent definition name to load from ~/.config/pi/agents/<name>.md. " +
           "Applies the agent's system prompt and tool restrictions to the subagent session.",
       })),
+      team: Type.Optional(Type.String({
+        description:
+          "Launch as a persistent coms-bus team member in this team (project). The agent " +
+          "stays alive and is addressable by `name` via coms_send/coms_broadcast; `task` is a warm-up message.",
+      })),
+      system_prompt: Type.Optional(Type.String({
+        description: "Inline persona/system prompt for the agent (alternative to `agent`).",
+      })),
     }),
 
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
@@ -748,6 +768,10 @@ export default function (pi: ExtensionAPI) {
       }
 
       const mode: AgentMode = params.mode === "background" ? "background" : "blocking";
+      // Team members are persistent coms-bus listeners; everything else is the
+      // task-then-done subagent. effectiveMode drives lifecycle + return shape.
+      const isTeam = typeof params.team === "string" && params.team.trim().length > 0;
+      const effectiveMode: AgentMode = isTeam ? "team" : mode;
 
       const session = currentTmuxSession();
       if (!session) {
@@ -787,6 +811,9 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 export default function (pi: ExtensionAPI) {
   let fired = false;
+  // PERSISTENT (team) members never write "done" — they stay alive to keep
+  // servicing coms messages; the parent finishes them only when the pane dies.
+  const PERSISTENT = ${isTeam ? "true" : "false"};
   const startedAt = Date.now();
   let modelId = "";
   let contextTokens = 0, totalOutput = 0, totalCost = 0, totalTurns = 0;
@@ -875,7 +902,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     writeState({
-      status: "done",
+      status: PERSISTENT ? "running" : "done",
       output: finalOutput || "(no output)",
       model: modelId || undefined,
       usage: { turns: totalTurns, input, output: totalOutput, cost: totalCost, elapsedMs: Date.now() - startedAt },
@@ -911,12 +938,14 @@ export default function (pi: ExtensionAPI) {
             details: {}, isError: true,
           };
         }
-        // Append a before_agent_start hook that injects the agent's system prompt.
-        // Splice it in just before the final closing brace of the export default function.
-        const sysPrompt = agentDef.systemPrompt;
+      }
+      // Persona: inline system_prompt wins, else the agent def's system prompt.
+      // Injected via a before_agent_start hook spliced before the final brace.
+      const personaPrompt = (params.system_prompt && params.system_prompt.trim()) || agentDef?.systemPrompt || "";
+      if (personaPrompt) {
         const hookCode = `
   pi.on("before_agent_start", async (_event, _ctx) => {
-    return { systemPrompt: ${JSON.stringify(sysPrompt)} };
+    return { systemPrompt: ${JSON.stringify(personaPrompt)} };
   });
 `;
         const lastBrace = finalExtSource.lastIndexOf("\n}");
@@ -960,6 +989,16 @@ export default function (pi: ExtensionAPI) {
         const envArgs = ["-e", "PI_SUBAGENT=1"];
         if (agentDef?.spawnAgents) envArgs.push("-e", "PI_AGENT_SPAWN=1");
         if (piDir) envArgs.push("-e", `PI_CODING_AGENT_DIR=${piDir}`);
+        // Team members auto-join the coms-bus: these env vars opt coms-bus.ts in
+        // (it auto-loads globally and activates on PI_COMS_PROJECT/PI_COMS_CNAME).
+        if (isTeam) {
+          envArgs.push("-e", `PI_COMS_PROJECT=${params.team}`);
+          envArgs.push("-e", `PI_COMS_CNAME=${safeName}`);
+          const purpose = (agentDef?.description || params.system_prompt || "").replace(/[\r\n\t]+/g, " ").trim().slice(0, 100);
+          if (purpose) envArgs.push("-e", `PI_COMS_PURPOSE=${purpose}`);
+          // Propagate a custom bus dir (tests/non-default) to the child.
+          if (process.env.PI_COMS_BUS_DIR) envArgs.push("-e", `PI_COMS_BUS_DIR=${process.env.PI_COMS_BUS_DIR}`);
+        }
         // Pass provider API keys from the parent's environment — the parent
         // already has them sourced from Keychain; a child login shell may not.
         for (const key of Object.keys(process.env)) {
@@ -1037,7 +1076,9 @@ export default function (pi: ExtensionAPI) {
         : agentModelId ? shortModelName(agentModelId) : undefined;
 
       const agent: AgentEntry = {
-        id, name: params.name, windowName, task: params.task, mode,
+        id, name: params.name, windowName,
+        task: isTeam ? `[team:${params.team}] ${params.task}` : params.task,
+        mode: effectiveMode,
         windowTarget, paneId, extFile: tmpExtPath, stateFile, inboxFile,
         status: "running", startedAt: timestamp,
         model: launchModelLabel,
@@ -1047,6 +1088,16 @@ export default function (pi: ExtensionAPI) {
       agent.watcher = startWatching(agent);
       setWidgetForAgent(agent);
       startTicking();
+
+      if (isTeam) {
+        // Persistent coms member: returns now; it lives until it exits / is
+        // dismissed (coms_shutdown) / its window closes.
+        ctx.ui.setWorkingVisible(false);
+        return {
+          content: [{ type: "text", text: `Team member "${params.name}" joined "${params.team}" (${windowTarget}) and is warming up. Talk to it with coms_send(target:"${safeName}", ...) once you're on the bus (/coms-join ${params.team}). It will keep running until dismissed (coms_shutdown) or its window closes.` }],
+          details: { id, windowTarget, windowName, mode: effectiveMode, team: params.team, cname: safeName },
+        };
+      }
 
       if (mode === "background") {
         // Returns now; the result lands later as a follow-up message.

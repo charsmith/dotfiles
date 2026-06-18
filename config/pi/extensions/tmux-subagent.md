@@ -8,8 +8,10 @@ redundant but each one fixes a specific failure we hit in testing (see
 
 ## What it gives you
 
-- **Tools**: `launch_agent` (blocking or background, optional `agent` definition), `agent_reply`.
+- **Tools**: `launch_agent` (blocking, background, or `team` member; optional `agent` definition or inline `system_prompt`), `agent_reply`.
 - **Commands**: `/agents` (list), `/agents-clear` (drop finished cards).
+- **Team members** (`team="<project>"`): launched as **persistent** coms-bus members instead of task-then-done subagents. `coms-bus.ts` auto-joins them via `PI_COMS_PROJECT`/`PI_COMS_CNAME` env (set by the launcher), so they're addressable by `name` via `coms_send`/`coms_broadcast`. `task` is a **plain warm-up** message; they are **not** killed when their first turn ends and stay alive to service coms traffic. The parent finishes them only when the pane dies (exit / `coms_shutdown` / window close). `system_prompt="..."` gives an inline persona (alternative to an `agent` def). See `coms-bus.md` for the messaging layer.
+  - Mechanics: `effectiveMode="team"` (returns immediately like background); the generated child extension carries `PERSISTENT=true`, so its `agent_end` writes `running` (never `done`) — that's what keeps it alive. Persona is injected the same way as an `agent` def (a `before_agent_start` hook spliced into the child extension).
 - **Agent definitions**: `~/.config/pi/agents/<name>.md` — YAML frontmatter (`name`, `description`, `tools`, `skills`) + system prompt body. Pass `agent="<name>"` to `launch_agent` to apply the system prompt, tool list, and skills to the child session.
 - **Skills policy**: subagents always launch with `--no-skills` by default. Agent frontmatter `skills: og,cy,ta` loads only those named skills; `skills: "*"` loads all global skills; omitting `skills` means none.
 - **Spawn policy**: subagents cannot launch further agents by default (`PI_SUBAGENT` blocks `launch_agent`). Agent frontmatter `spawn_agents: true` sets `PI_AGENT_SPAWN=1` in the child env, allowing one level of nesting. Children spawned by that agent do NOT inherit `PI_AGENT_SPAWN` — nesting stops at one level.
