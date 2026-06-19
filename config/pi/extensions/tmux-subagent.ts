@@ -176,6 +176,15 @@ export default function (pi: ExtensionAPI) {
 
   function renderCard(agent: AgentEntry, inner: number, theme: any): string[] {
     const ds = displayStatus(agent);
+    // cardColor drives the border and name — stays accent while alive so the
+    // card doesn't go visually dead just because an agent is between turns.
+    const cardColor: any =
+      ds === "running" || ds === "working" || ds === "idle" ? "accent"
+      : ds === "stopped"   ? "warning"
+      : ds === "completed" ? "success"
+      : ds === "done"      ? "success"
+      :                      "error";
+    // statusColor drives only the icon + status label line.
     const statusColor: any =
       ds === "running" || ds === "working" ? "accent"
       : ds === "idle"      ? "dim"
@@ -195,10 +204,10 @@ export default function (pi: ExtensionAPI) {
     const cell = (styled: string): string => {
       const vis = visibleWidth(styled);
       return (
-        theme.fg(statusColor, "│") +
+        theme.fg(cardColor, "│") +
         styled +
         " ".repeat(Math.max(0, inner - vis)) +
-        theme.fg(statusColor, "│")
+        theme.fg(cardColor, "│")
       );
     };
 
@@ -209,9 +218,9 @@ export default function (pi: ExtensionAPI) {
     const trunc        = truncateToWidth(rawNameModel, inner - 1);
     const dotIdx       = trunc.indexOf(" · ");
     const nameStyled   = dotIdx >= 0
-      ? theme.fg(statusColor, theme.bold(trunc.slice(0, dotIdx))) +
+      ? theme.fg(cardColor, theme.bold(trunc.slice(0, dotIdx))) +
         theme.fg("dim", trunc.slice(dotIdx))
-      : theme.fg(statusColor, theme.bold(trunc));
+      : theme.fg(cardColor, theme.bold(trunc));
 
     // Line 2: status indicator + pane ref + elapsed (or stop reason)
     const elapsed    = fmtElapsed(Date.now() - agent.startedAt);
@@ -220,9 +229,13 @@ export default function (pi: ExtensionAPI) {
       ? `↑${fmtTokens(u.input)} ↓${fmtTokens(u.output)}  $${u.cost.toFixed(3)}  ${elapsed}`
       : elapsed;
     const safeReason = agent.stopReason?.replace(/[\r\n\t]+/g, " ").trim();
-    const statusLabel = ds === "completed" ? "completed" : ds;
+    // Pad the status label to a fixed width so the window target and stats
+    // don't shift when transitioning between labels of different lengths
+    // (e.g. "idle" ↔ "working" ↔ "running").
+    const STATUS_WIDTH = 9; // length of "completed", the longest label
+    const statusLabel = (ds === "completed" ? "completed" : ds).padEnd(STATUS_WIDTH);
     const rawStatus  = ds === "stopped" && safeReason
-      ? `${icon} stopped  [${agent.windowTarget}]  ${safeReason}`
+      ? `${icon} ${'stopped'.padEnd(STATUS_WIDTH)}  [${agent.windowTarget}]  ${safeReason}`
       : `${icon} ${statusLabel}  [${agent.windowTarget}]  ${liveStats}`;
     const statusText = truncateToWidth(rawStatus, inner - 1);
 
@@ -231,8 +244,8 @@ export default function (pi: ExtensionAPI) {
     const flatTask = agent.task.replace(/[\r\n\t]+/g, " ").trim();
     const taskText = truncateToWidth(flatTask, inner - 1);
 
-    const top = theme.fg(statusColor, "┌" + "─".repeat(inner) + "┐");
-    const bot = theme.fg(statusColor, "└" + "─".repeat(inner) + "┘");
+    const top = theme.fg(cardColor, "┌" + "─".repeat(inner) + "┐");
+    const bot = theme.fg(cardColor, "└" + "─".repeat(inner) + "┘");
 
     return [
       top,
