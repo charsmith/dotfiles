@@ -527,7 +527,11 @@ export function spawnAgentWindow(opts: SpawnOptions): SpawnHandle {
       "-n", windowName,
       "-P", "-F", "#{session_name}:#{window_index}\t#{pane_id}",
       ...envArgs,
-      "--", "pi", "-e", extFile, ...modelArgs, ...toolArgs, ...skillArgs,
+      "--", "pi", "-e", extFile,
+        // Team agents load the guardrails-block extension so they auto-deny
+        // permission prompts rather than pausing and waiting for human input.
+        ...(opts.persistent ? ["-e", path.join(os.homedir(), ".config", "pi", "extensions", "guardrails-block.ts")] : []),
+        ...modelArgs, ...toolArgs, ...skillArgs,
     ], { encoding: "utf-8" }).trim();
 
     const [wt, pd] = raw.split("\t");
