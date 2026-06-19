@@ -58,8 +58,10 @@
  */
 
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync, unlinkSync, watch, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, watch, writeFileSync } from "node:fs";
 import type { FSWatcher } from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
@@ -100,6 +102,7 @@ interface AgentEntry {
   task: string;
   mode: AgentMode;
   isCoordinator?: boolean;   // designated coordinator of a team
+  workDir?: string;          // work directory for coordinator agents
   windowTarget: string;
   paneId: string;
   extFile: string;
@@ -126,6 +129,33 @@ interface ToolResultLike {
 }
 
 // ─── Extension ─────────────────────────────────────────────────────────────
+
+// ─── Agent-teams config + coordinator helpers ────────────────────────────────
+
+function agentTeamsWorkdir(): string {
+  const cfgPath = path.join(os.homedir(), ".config", "pi", "agent-teams.json");
+  try {
+    const raw = JSON.parse(readFileSync(cfgPath, "utf-8"));
+    const wd  = typeof raw.workdir === "string" ? raw.workdir : "~/code/agent-teams";
+    return wd.replace(/^~/, os.homedir());
+  } catch {
+    return path.join(os.homedir(), "code", "agent-teams");
+  }
+}
+
+function makeUnitOfWorkId(task: string): string {
+  const now = new Date();
+  const pad = (n: number, w = 2) => String(n).padStart(w, "0");
+  const ts  = `${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}-` +
+              `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  const slug = task.toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, "")
+    .trim()
+    .replace(/\s+/g, "-")
+    .slice(0, 40)
+    .replace(/-+$/, "");
+  return slug ? `${ts}-${slug}` : ts;
+}
 
 export default function (pi: ExtensionAPI) {
   // When running as a subagent, this extension is still loaded from the global
@@ -366,22 +396,41 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      // Persistent agent finished a turn → now idle. Update the widget.
-      // Workers are silent — their output goes to the coordinator via coms.
-      // The designated coordinator reports its output back to the main thread.
+      // Coordinator finished the unit of work — output.md was written.
+      // Deliver a single clean follow-up with the report content.
+      if (state.status === "completed" && agent.status !== "completed") {
+        agent.status = "completed";
+        agent.model  = state.model ? shortModelName(state.model) : agent.model;
+        agent.usage  = state.usage;
+        setWidgetForAgent(agent);
+        const workDir = agent.workDir ?? state.workDir;
+        let reportContent = "(no report written)";
+        if (workDir) {
+          try { reportContent = readFileSync(path.join(workDir, "output.md"), "utf-8").trim(); } catch {}
+        }
+        const usageLine  = agent.usage ? fmtUsage(agent.usage) : "";
+        const reportPath = workDir ? path.join(workDir, "output.md") : "(unknown)";
+        pi.sendMessage({
+          customType: "coordinator-complete",
+          content: [
+            `Coordinator "${agent.name}" completed (${usageLine}).`,
+            `Report: ${reportPath}`,
+            "",
+            reportContent.slice(0, 2000),
+            reportContent.length > 2000 ? "\n\n…(truncated — read the full report at the path above)" : "",
+          ].join("\n").trimEnd(),
+          display: true,
+        }, { deliverAs: "followUp", triggerTurn: true });
+        return;
+      }
+
+      // Persistent agent finished a turn → now idle. Update the widget silently.
+      // Workers and coordinators are both silent on idle — only completed fires a follow-up.
       if (state.status === "idle" && agent.status === "running") {
         agent.status = "idle";
         agent.model  = state.model ? shortModelName(state.model) : agent.model;
         agent.usage  = state.usage;
         setWidgetForAgent(agent);
-        if (agent.isCoordinator && state.output && state.output !== "(no output)") {
-          const usageLine = agent.usage ? fmtUsage(agent.usage) : "";
-          pi.sendMessage({
-            customType: "coordinator-idle",
-            content: `Coordinator "${agent.name}" finished (${usageLine}):\n\n${state.output}`,
-            display: true,
-          }, { deliverAs: "followUp", triggerTurn: true });
-        }
         return;
       }
 
@@ -710,13 +759,23 @@ export default function (pi: ExtensionAPI) {
       // safeName, so derive both with the shared sanitizeAgentName().
       const safeName = sanitizeAgentName(params.name);
       const extraEnv: Record<string, string> = {};
+      let coordinatorWorkDir: string | undefined;
       if (isTeam) {
         extraEnv.PI_COMS_PROJECT = params.team!;
         extraEnv.PI_COMS_CNAME   = safeName;
         const purpose = (agentDef?.description || params.system_prompt || "").replace(/[\r\n\t]+/g, " ").trim().slice(0, 100);
         if (purpose) extraEnv.PI_COMS_PURPOSE = purpose;
-        // Propagate a custom bus dir (tests/non-default) to the child.
         if (process.env.PI_COMS_BUS_DIR) extraEnv.PI_COMS_BUS_DIR = process.env.PI_COMS_BUS_DIR;
+
+        if (params.coordinator) {
+          const workdir = agentTeamsWorkdir();
+          const unitId  = makeUnitOfWorkId(params.task);
+          coordinatorWorkDir = path.join(workdir, params.team!, unitId);
+          mkdirSync(coordinatorWorkDir, { recursive: true });
+          writeFileSync(path.join(coordinatorWorkDir, "input.md"), params.task, "utf-8");
+          extraEnv.PI_COORDINATOR = "1";
+          extraEnv.PI_WORK_DIR    = coordinatorWorkDir;
+        }
       }
 
       // Spawn the window + wire the IPC via the shared "one link" primitive.
@@ -731,6 +790,7 @@ export default function (pi: ExtensionAPI) {
           agentDef,
           systemPrompt: params.system_prompt,
           extraEnv,
+          coordinatorWorkDir,
         });
       } catch (err: any) {
         const text = err instanceof TmuxSpawnError
@@ -749,6 +809,7 @@ export default function (pi: ExtensionAPI) {
         status: "running", startedAt,
         model: handle.modelLabel,
         isCoordinator: isTeam && params.coordinator === true,
+        workDir: coordinatorWorkDir,
       };
       agents.set(id, agent);
 

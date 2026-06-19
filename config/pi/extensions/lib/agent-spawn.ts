@@ -124,6 +124,7 @@ export interface AgentState {
   model?: string;
   usage?: AgentUsage;
   seq?: number;      // monotonic completion counter (incremented each agent_end)
+  workDir?: string;  // coordinator work dir (set when status === "completed")
 }
 
 // ─── Formatting ──────────────────────────────────────────────────────────────
@@ -237,6 +238,7 @@ export function buildChildExtensionSource(opts: {
   inboxFile: string;
   persistent: boolean;
   personaPrompt?: string;
+  coordinatorWorkDir?: string;   // set for coordinator agents — checked for output.md
 }): string {
   const { task, stateFile, inboxFile, persistent, personaPrompt } = opts;
 
@@ -338,12 +340,24 @@ export default function (pi: ExtensionAPI) {
       }
     }
 
+    // Coordinators signal completion by writing output.md to their work dir.
+    // The parent watches the state file; on seeing "completed" it reads the
+    // report and delivers a single follow-up to the main thread.
+    const COORD_WORK_DIR = ${JSON.stringify(opts.coordinatorWorkDir || "")};
+    let persistStatus: string = "idle";
+    if (PERSISTENT && COORD_WORK_DIR) {
+      try {
+        if (existsSync(COORD_WORK_DIR + "/output.md")) persistStatus = "completed";
+      } catch {}
+    }
+
     writeState({
-      status: PERSISTENT ? "idle" : "done",
+      status: PERSISTENT ? persistStatus : "done",
       output: finalOutput || "(no output)",
       model: modelId || undefined,
       usage: { turns: totalTurns, input, output: totalOutput, cost: totalCost, elapsedMs: Date.now() - startedAt },
       seq: ++seq,
+      workDir: COORD_WORK_DIR || undefined,
     });
   });
 
@@ -390,6 +404,8 @@ export interface SpawnOptions {
   task: string;
   /** Persistent (team) member: stays alive, never writes "done". */
   persistent?: boolean;
+  /** Work directory for coordinator agents — written to state on completion. */
+  coordinatorWorkDir?: string;
   /** Explicit model as "provider/model-id" or bare "model-id". */
   model?: string;
   /** Fallback model when `model` is omitted (typically ctx.model). */
@@ -440,13 +456,29 @@ export function spawnAgentWindow(opts: SpawnOptions): SpawnHandle {
   const inboxFile = `${tmpBase}.inbox.txt`;
 
   // ── Generate + write the child extension ──────────────────────────────────
-  const personaPrompt = (opts.systemPrompt && opts.systemPrompt.trim()) || opts.agentDef?.systemPrompt || "";
+  let personaPrompt = (opts.systemPrompt && opts.systemPrompt.trim()) || opts.agentDef?.systemPrompt || "";
+  if (opts.coordinatorWorkDir) {
+    const workDir = opts.coordinatorWorkDir;
+    const unitId  = path.basename(workDir);
+    const coordinatorInstructions = [
+      "\n\n---",
+      "You are the coordinator for this team.",
+      `Unit of work: ${unitId}`,
+      `Your task is in: ${workDir}/input.md`,
+      "When all work is complete:",
+      `  1. Write your final report to ${workDir}/output.md`,
+      "  2. Your session will signal completion automatically — do not exit.",
+      "Do not write output.md until the work is fully done.",
+    ].join("\n");
+    personaPrompt = personaPrompt ? personaPrompt + coordinatorInstructions : coordinatorInstructions;
+  }
   const extSource = buildChildExtensionSource({
     task: opts.task,
     stateFile,
     inboxFile,
     persistent: !!opts.persistent,
     personaPrompt,
+    coordinatorWorkDir: opts.coordinatorWorkDir,
   });
   // 0o600 — state/inbox/ext files carry task text + agent output in a shared tmp dir.
   writeFileSync(extFile, extSource, { mode: 0o600 });
