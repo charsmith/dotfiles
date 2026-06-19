@@ -522,6 +522,16 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
+    // Persistent team members do their real work over coms; their final text (if
+    // any) already went back to the asker that way. When such a member exits
+    // (typically a /team-down or coms_shutdown teardown, or a manual kill), a
+    // "finished" follow-up is just confusing duplicate noise — so suppress it by
+    // default and surface only a quiet toast.
+    if (agent.mode === "team") {
+      try { latestCtx?.ui?.notify?.(`Team member "${agent.name}" exited.`, "info"); } catch { /* ignore */ }
+      return;
+    }
+
     // Background launch: deliver as a follow-up message to the parent thread.
     pi.sendMessage({
       customType: "subagent-result",
