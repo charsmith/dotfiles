@@ -99,7 +99,7 @@ export function loadAgentDef(agentName: string): AgentDef | null {
 
 // ─── Shared state / usage types ──────────────────────────────────────────────
 
-export type AgentStatus = "running" | "stopped" | "done" | "error";
+export type AgentStatus = "running" | "idle" | "stopped" | "completed" | "done" | "error";
 
 export interface AgentUsage {
   turns: number;
@@ -339,7 +339,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     writeState({
-      status: PERSISTENT ? "running" : "done",
+      status: PERSISTENT ? "idle" : "done",
       output: finalOutput || "(no output)",
       model: modelId || undefined,
       usage: { turns: totalTurns, input, output: totalOutput, cost: totalCost, elapsedMs: Date.now() - startedAt },
@@ -542,10 +542,15 @@ export function spawnAgentWindow(opts: SpawnOptions): SpawnHandle {
   // window options stop tmux's own escape-sequence / command-based renames.
   // @pi_subagent is read by window-icon.sh to show the subagent icon.
   // Target via the stable pane id (window index may shift later).
+  // Batch all three set-window-option calls into one tmux invocation to save
+  // two process forks (small but real startup latency).
   try {
-    execSync(`tmux set-window-option -t ${paneId} allow-rename off`, { stdio: "ignore" });
-    execSync(`tmux set-window-option -t ${paneId} automatic-rename off`, { stdio: "ignore" });
-    execSync(`tmux set-window-option -t ${paneId} @pi_subagent 1`, { stdio: "ignore" });
+    execSync(
+      `tmux set-window-option -t ${paneId} allow-rename off` +
+      ` \; set-window-option -t ${paneId} automatic-rename off` +
+      ` \; set-window-option -t ${paneId} @pi_subagent 1`,
+      { stdio: "ignore" },
+    );
   } catch {}
 
   const modelLabel = agentProvider && agentModelId

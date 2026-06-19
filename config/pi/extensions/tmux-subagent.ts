@@ -89,12 +89,17 @@ import {
 
 type AgentMode = "blocking" | "background" | "team";
 
+// Display status shown in the widget — extends wire AgentStatus with a
+// 'working' alias used for team members so they read differently from solo agents.
+type DisplayStatus = "running" | "working" | "idle" | "stopped" | "completed" | "done" | "error";
+
 interface AgentEntry {
   id: string;
   name: string;
   windowName: string;
   task: string;
   mode: AgentMode;
+  isCoordinator?: boolean;   // designated coordinator of a team
   windowTarget: string;
   paneId: string;
   extFile: string;
@@ -164,18 +169,28 @@ export default function (pi: ExtensionAPI) {
   // is always determined by startedAt — re-calling setWidget on a per-agent
   // key would re-insert it at the end, causing flicker / reordering.
 
+  function displayStatus(agent: AgentEntry): DisplayStatus {
+    if (agent.status === "running" && agent.mode === "team") return "working";
+    return agent.status as DisplayStatus;
+  }
+
   function renderCard(agent: AgentEntry, inner: number, theme: any): string[] {
+    const ds = displayStatus(agent);
     const statusColor: any =
-      agent.status === "running" ? "accent"
-      : agent.status === "stopped" ? "warning"
-      : agent.status === "done"    ? "success"
-      :                              "error";
+      ds === "running" || ds === "working" ? "accent"
+      : ds === "idle"      ? "dim"
+      : ds === "stopped"   ? "warning"
+      : ds === "completed" ? "success"
+      : ds === "done"      ? "success"
+      :                      "error";
 
     const icon =
-      agent.status === "running" ? "●"
-      : agent.status === "stopped" ? "⚠"
-      : agent.status === "done"    ? "✓"
-      :                              "✗";
+      ds === "running" || ds === "working" ? "●"
+      : ds === "idle"      ? "◦"
+      : ds === "stopped"   ? "⚠"
+      : ds === "completed" ? "✓"
+      : ds === "done"      ? "✓"
+      :                      "✗";
 
     const cell = (styled: string): string => {
       const vis = visibleWidth(styled);
@@ -187,9 +202,10 @@ export default function (pi: ExtensionAPI) {
       );
     };
 
-    // Line 1: name · model
+    // Line 1: name · model  [coordinator badge if applicable]
+    const coordBadge  = agent.isCoordinator ? " [coordinator]" : "";
     const safeName    = agent.name.replace(/[\r\n\t]+/g, " ").trim();
-    const rawNameModel = safeName + (agent.model ? ` · ${agent.model}` : "");
+    const rawNameModel = safeName + coordBadge + (agent.model ? ` · ${agent.model}` : "");
     const trunc        = truncateToWidth(rawNameModel, inner - 1);
     const dotIdx       = trunc.indexOf(" · ");
     const nameStyled   = dotIdx >= 0
@@ -204,9 +220,10 @@ export default function (pi: ExtensionAPI) {
       ? `↑${fmtTokens(u.input)} ↓${fmtTokens(u.output)}  $${u.cost.toFixed(3)}  ${elapsed}`
       : elapsed;
     const safeReason = agent.stopReason?.replace(/[\r\n\t]+/g, " ").trim();
-    const rawStatus  = agent.status === "stopped" && safeReason
+    const statusLabel = ds === "completed" ? "completed" : ds;
+    const rawStatus  = ds === "stopped" && safeReason
       ? `${icon} stopped  [${agent.windowTarget}]  ${safeReason}`
-      : `${icon} ${agent.status}  [${agent.windowTarget}]  ${liveStats}`;
+      : `${icon} ${statusLabel}  [${agent.windowTarget}]  ${liveStats}`;
     const statusText = truncateToWidth(rawStatus, inner - 1);
 
     // Line 3: task text — collapse newlines/control chars so the cell stays
@@ -336,6 +353,33 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
+      // Persistent agent finished a turn → now idle. Update the widget.
+      // Workers are silent — their output goes to the coordinator via coms.
+      // The designated coordinator reports its output back to the main thread.
+      if (state.status === "idle" && agent.status === "running") {
+        agent.status = "idle";
+        agent.model  = state.model ? shortModelName(state.model) : agent.model;
+        agent.usage  = state.usage;
+        setWidgetForAgent(agent);
+        if (agent.isCoordinator && state.output && state.output !== "(no output)") {
+          const usageLine = agent.usage ? fmtUsage(agent.usage) : "";
+          pi.sendMessage({
+            customType: "coordinator-idle",
+            content: `Coordinator "${agent.name}" finished (${usageLine}):\n\n${state.output}`,
+            display: true,
+          }, { deliverAs: "followUp", triggerTurn: true });
+        }
+        return;
+      }
+
+      // Idle → running again (new coms message arrived)
+      if (state.status === "running" && agent.status === "idle") {
+        agent.status = "running";
+        agent.model  = state.model ? shortModelName(state.model) : agent.model;
+        setWidgetForAgent(agent);
+        return;
+      }
+
       if (state.status === "done" || state.status === "error") {
         agent.status = state.status;
         agent.model  = state.model ? shortModelName(state.model) : agent.model;
@@ -346,7 +390,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     // Step 2: if pane is dead (agent exited without writing done state), clean up
-    if (agent.status === "running" && !isPaneAlive(agent.paneId)) {
+    if ((agent.status === "running" || agent.status === "idle") && !isPaneAlive(agent.paneId)) {
       // Try one last read in case the file appeared between checks
       let output: string | undefined;
       if (existsSync(agent.stateFile)) {
@@ -610,6 +654,11 @@ export default function (pi: ExtensionAPI) {
           "Launch as a persistent coms-bus team member in this team (project). The agent " +
           "stays alive and is addressable by `name` via coms_send/coms_broadcast; `task` is a warm-up message.",
       })),
+      coordinator: Type.Optional(Type.Boolean({
+        description:
+          "Mark this team member as the coordinator. When it finishes a turn, its output is " +
+          "delivered as a follow-up to the main thread. Workers are always silent.",
+      })),
       system_prompt: Type.Optional(Type.String({
         description: "Inline persona/system prompt for the agent (alternative to `agent`).",
       })),
@@ -686,6 +735,7 @@ export default function (pi: ExtensionAPI) {
         windowTarget, paneId, extFile, stateFile, inboxFile,
         status: "running", startedAt,
         model: handle.modelLabel,
+        isCoordinator: isTeam && params.coordinator === true,
       };
       agents.set(id, agent);
 
@@ -738,11 +788,24 @@ export default function (pi: ExtensionAPI) {
       const rawModel  = (args as any).model ?? currentModelLabel;
       const modelTag  = rawModel ? ` [${shortModelName(rawModel)}]` : "";
       const text      = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      text.setText(
-        theme.fg("accent", "→ ") + theme.fg("toolTitle", theme.bold("launch_agent ")) +
-        theme.fg("accent", name) + theme.fg("dim", modelTag) +
-        "\n  " + theme.fg("dim", task.length > 72 ? task.slice(0, 71) + "…" : task)
-      );
+
+      if (!context.argsComplete) {
+        // LLM is still streaming the tool call parameters — show a composing
+        // indicator so it's clear the agent hasn't launched yet.
+        const nameHint = args.name ? theme.fg("accent", args.name) + "  " : "";
+        const taskPreview = task.length > 55 ? task.slice(0, 54) + "…" : task;
+        text.setText(
+          theme.fg("dim", "→ ") + theme.fg("toolTitle", theme.bold("launch_agent ")) +
+          nameHint + theme.fg("warning", "⟳ composing…") +
+          "\n  " + theme.fg("dim", taskPreview)
+        );
+      } else {
+        text.setText(
+          theme.fg("accent", "→ ") + theme.fg("toolTitle", theme.bold("launch_agent ")) +
+          theme.fg("accent", name) + theme.fg("dim", modelTag) +
+          "\n  " + theme.fg("dim", task.length > 72 ? task.slice(0, 71) + "…" : task)
+        );
+      }
       return text;
     },
 
