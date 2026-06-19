@@ -16,8 +16,10 @@
  * reply arrives later as a follow-up message (same mechanism as a background
  * subagent result). This avoids a genuine deadlock: if an orchestrator BLOCKS
  * awaiting expert A, and A asks the orchestrator a sub-question, both wait
- * forever. Async delivery lets turns interleave. `wait: true` is offered as a
- * blocking convenience for simple leaf calls (documented caveat).
+ * forever. Async delivery lets turns interleave. There is intentionally NO
+ * blocking send: every coms_send returns immediately and the reply arrives as a
+ * follow-up (use coms_poll to check without blocking). A blocking send was tried
+ * and removed — it reintroduced exactly the deadlock/hang this design avoids.
  *
  * ── Substrate (file-IPC, swappable) ─────────────────────────────────────────
  * Everything under the "SUBSTRATE" banner is file-based and is the only part
@@ -58,7 +60,6 @@ const BUS_DIR = process.env.PI_COMS_BUS_DIR || path.join(os.homedir(), ".pi", "c
 const MAX_HOPS = Number(process.env.PI_COMS_BUS_MAX_HOPS) || 5;
 const HEARTBEAT_MS = Number(process.env.PI_COMS_BUS_HEARTBEAT_MS) || 10_000;
 const STALE_MS = Number(process.env.PI_COMS_BUS_STALE_MS) || 30_000;
-const WAIT_TIMEOUT_MS = Number(process.env.PI_COMS_BUS_TIMEOUT_MS) || 1_800_000; // 30m
 const TICK_MS = 1_000;
 
 const FALLBACK_PALETTE = [
@@ -129,16 +130,15 @@ interface Inbound {
   response_schema: object | null;
 }
 
-// A reply we're waiting on (from a coms_send / coms_broadcast we issued).
+// A reply we're tracking (from a coms_send / coms_broadcast we issued). Sends are
+// always async — the answer is surfaced as a follow-up; this record just lets
+// coms_poll report status until then.
 interface Pending {
   msg_id: string;
   group_id: string | null;
   target_name: string;
   created_at: string;
   result?: { response?: unknown; error?: string | null };
-  resolve: (v: { response?: unknown; error?: string | null }) => void;
-  promise: Promise<{ response?: unknown; error?: string | null }>;
-  consumed: boolean; // true once returned via wait:true (suppresses followUp)
 }
 
 // ━━ Small utilities ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -179,8 +179,9 @@ function pidAlive(pid: number): boolean {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // SUBSTRATE (file-IPC) — the only section that changes for the Redis swap.
 // Public surface used by the rest of the extension:
-//   ensureDirs, writeRegistry, removeRegistry, listLiveAgents, resolveTarget,
-//   deliverMessage, drainInbox, watchInbox
+//   ensureDirs, writeRegistry, removeRegistry, purgeInbox, listLiveAgents,
+//   resolveTarget, deliverMessage, claimInbox, recoverInflight, ackPrompt,
+//   watchInbox
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 function projectDir(project: string): string {
@@ -212,8 +213,20 @@ function writeRegistry(entry: RegistryEntry): void {
   atomicWrite(registryPath(entry.project, entry.name), JSON.stringify(entry));
 }
 
+// Remove a presence entry. The inbox is KEPT if it still holds pending or
+// .inflight work, so a respawn with the same name can recover it (durability).
+// Only an empty inbox dir is cleaned up. Use purgeInbox() for a hard teardown.
 function removeRegistry(project: string, name: string): void {
   try { unlinkSync(registryPath(project, name)); } catch { /* ignore */ }
+  try {
+    const dir = inboxDir(project, name);
+    if (existsSync(dir) && readdirSync(dir).length === 0) rmSync(dir, { recursive: true, force: true });
+  } catch { /* ignore */ }
+}
+
+// Hard-remove an inbox (used on explicit teardown like /team-down) — discards any
+// pending/.inflight messages because the team is going away for good.
+function purgeInbox(project: string, name: string): void {
   try { rmSync(inboxDir(project, name), { recursive: true, force: true }); } catch { /* ignore */ }
 }
 
@@ -268,7 +281,16 @@ function deliverMessage(target: RegistryEntry, msg: Message): boolean {
 }
 
 // Read + delete all pending inbox files for this agent, oldest first.
-function drainInbox(id: Identity): Message[] {
+// msg_id -> path of the .inflight file backing a prompt we're servicing, so
+// ackPrompt() can delete it once the reply is shipped.
+const inflightFiles = new Map<string, string>();
+
+// Claim NEW inbox files. Prompts are renamed to `<file>.inflight` (a two-phase
+// ack: claimed now, deleted only after we ship the reply) so a crash/kill
+// mid-turn doesn't lose the asker's question — recoverInflight() re-queues it on
+// the next join. Responses/control are terminal, so they're delete-on-read.
+// Returns messages in FIFO order.
+function claimInbox(id: Identity): Message[] {
   const dir = inboxDir(id.project, id.name);
   if (!existsSync(dir)) return [];
   let files: string[];
@@ -277,13 +299,47 @@ function drainInbox(id: Identity): Message[] {
   const msgs: Message[] = [];
   for (const f of files) {
     const fp = path.join(dir, f);
-    try {
-      const msg = JSON.parse(readFileSync(fp, "utf-8")) as Message;
+    let msg: Message;
+    try { msg = JSON.parse(readFileSync(fp, "utf-8")) as Message; }
+    catch { try { unlinkSync(fp); } catch { /* ignore */ } continue; }
+    if (msg.kind === "prompt") {
+      const inflight = `${fp}.inflight`;
+      try { renameSync(fp, inflight); inflightFiles.set(msg.msg_id, inflight); }
+      catch { try { unlinkSync(fp); } catch { /* ignore */ } }
       msgs.push(msg);
-    } catch { /* skip corrupt/partial */ }
-    try { unlinkSync(fp); } catch { /* ignore */ }
+    } else {
+      msgs.push(msg);
+      try { unlinkSync(fp); } catch { /* ignore */ }
+    }
   }
   return msgs;
+}
+
+// On join, re-claim prompts a previous run left .inflight (crashed/killed before
+// replying) so the asker's question is answered after a respawn instead of being
+// silently dropped. Files are kept; paths re-mapped for a later ackPrompt().
+function recoverInflight(id: Identity): Message[] {
+  const dir = inboxDir(id.project, id.name);
+  if (!existsSync(dir)) return [];
+  let files: string[];
+  try { files = readdirSync(dir).filter(f => f.endsWith(".inflight")).sort(); }
+  catch { return []; }
+  const msgs: Message[] = [];
+  for (const f of files) {
+    const fp = path.join(dir, f);
+    try {
+      const msg = JSON.parse(readFileSync(fp, "utf-8")) as Message;
+      if (msg.kind === "prompt") { inflightFiles.set(msg.msg_id, fp); msgs.push(msg); }
+      else { try { unlinkSync(fp); } catch { /* ignore */ } }
+    } catch { try { unlinkSync(fp); } catch { /* ignore */ } }
+  }
+  return msgs;
+}
+
+// Ack a serviced prompt: delete its .inflight file once the reply is shipped.
+function ackPrompt(msg_id: string): void {
+  const fp = inflightFiles.get(msg_id);
+  if (fp) { try { unlinkSync(fp); } catch { /* ignore */ } inflightFiles.delete(msg_id); }
 }
 
 function watchInbox(id: Identity, onChange: () => void): FSWatcher | null {
@@ -406,7 +462,7 @@ export default function (pi: ExtensionAPI) {
 
   function onInboxChange(): void {
     if (!identity) return;
-    for (const msg of drainInbox(identity)) {
+    for (const msg of claimInbox(identity)) {
       if (msg.kind === "response") {
         resolveResponse(msg);
       } else if (msg.kind === "control") {
@@ -439,16 +495,27 @@ export default function (pi: ExtensionAPI) {
     const schemaNote = next.response_schema
       ? `\n\n(Reply with JSON matching this schema; your final assistant message is sent back verbatim:\n${JSON.stringify(next.response_schema)})`
       : "";
+    // Reply correlation is automatic: the asker is waiting on THIS request's
+    // msg_id, which only the agent_end hook (your turn's final text) resolves.
+    // If the agent instead calls coms_send to reply, it opens a NEW thread and
+    // the asker waits forever. State the rule explicitly (and coms_send has a
+    // safety net that re-routes a reply-to-current-asker — see its execute()).
+    const replyNote = `\n\n(To answer, just write your reply as your normal response — it is sent back to ${next.from_name} automatically. Do NOT call coms_send to reply; that opens a new thread.)`;
     try {
       pi.sendMessage({
         customType: "coms-inbound",
-        content: `[coms · question from ${next.from_name}]\n\n${body}${schemaNote}`,
+        content: `[coms · question from ${next.from_name}]\n\n${body}${schemaNote}${replyNote}`,
         display: true,
         details: { msg_id: next.msg_id, from: next.from_name },
       }, { deliverAs: "followUp", triggerTurn: true });
       pi.appendEntry("coms-bus-log", { event: "inbound_prompt", msg_id: next.msg_id, from: next.from_name, hops: next.hops });
     } catch {
+      // pi is still processing (e.g. the warmup turn at startup races recovery,
+      // or a human turn is mid-flight). Our `busy` flag can lag pi's real state,
+      // so don't drop the prompt — put it BACK on the queue and let the next
+      // idle tick / agent_end retry. (Dropping it here was a lost-message bug.)
       currentInbound = null;
+      inboundQueue.unshift(next);
     }
     refreshWidget();
   }
@@ -470,23 +537,20 @@ export default function (pi: ExtensionAPI) {
     pi.appendEntry("coms-bus-log", { event: "inbound_response", msg_id: msg.msg_id, from: msg.from_name, error: msg.error ?? null });
     if (!p) return; // orphan (we restarted, or already cleaned up)
     p.result = { response: msg.response, error: msg.error ?? null };
-    p.resolve(p.result);
-    // If nobody is blocking on this via wait:true, surface it as a follow-up so
-    // the orchestrator processes it in a fresh turn (async, deadlock-free).
-    if (!p.consumed) {
-      const tag = p.group_id ? ` (broadcast ${p.group_id})` : "";
-      const bodyText = msg.error
-        ? `[coms · ERROR from ${msg.from_name}${tag}] ${msg.error}`
-        : `[coms · answer from ${msg.from_name}${tag}]\n\n${typeof msg.response === "string" ? msg.response : JSON.stringify(msg.response, null, 2)}`;
-      try {
-        pi.sendMessage({
-          customType: "coms-response",
-          content: bodyText,
-          display: true,
-          details: { msg_id: msg.msg_id, group_id: p.group_id, from: msg.from_name },
-        }, { deliverAs: "followUp", triggerTurn: true });
-      } catch { /* ignore */ }
-    }
+    // Sends are async — always surface the answer as a follow-up so the
+    // orchestrator processes it in a fresh turn (deadlock-free).
+    const tag = p.group_id ? ` (broadcast ${p.group_id})` : "";
+    const bodyText = msg.error
+      ? `[coms · ERROR from ${msg.from_name}${tag}] ${msg.error}`
+      : `[coms · answer from ${msg.from_name}${tag}]\n\n${typeof msg.response === "string" ? msg.response : JSON.stringify(msg.response, null, 2)}`;
+    try {
+      pi.sendMessage({
+        customType: "coms-response",
+        content: bodyText,
+        display: true,
+        details: { msg_id: msg.msg_id, group_id: p.group_id, from: msg.from_name },
+      }, { deliverAs: "followUp", triggerTurn: true });
+    } catch { /* ignore */ }
     refreshWidget();
   }
 
@@ -523,18 +587,7 @@ export default function (pi: ExtensionAPI) {
       catch { error = "response not valid JSON"; payload = null; }
     }
 
-    const target = resolveTarget(inb.from_session, identity.project) ?? resolveTarget(inb.from_name, identity.project);
-    if (target) {
-      const reply: Message = {
-        kind: "response", msg_id: inb.msg_id, group_id: inb.group_id,
-        from_session: identity.session_id, from_name: identity.name, from_cwd: identity.cwd,
-        to_name: target.name, hops: 0, ts: nowIso(),
-        response: payload, error,
-      };
-      try { deliverMessage(target, reply); }
-      catch { /* best-effort */ }
-      pi.appendEntry("coms-bus-log", { event: "outbound_response", msg_id: inb.msg_id, to: target.name, error });
-    }
+    shipResponse(inb, payload, error);
 
     prompts.delete(inb.msg_id);
     currentInbound = null;
@@ -597,23 +650,49 @@ export default function (pi: ExtensionAPI) {
     name: "coms_send",
     label: "Coms Send",
     description:
-      "Send a question/task to one teammate. Returns a msg_id immediately and the " +
-      "answer arrives later as a follow-up message (async — keep working / send to others). " +
-      "Set wait=true to BLOCK and return the answer inline (convenient for a single leaf " +
-      "call; do NOT use wait=true if the teammate might ask YOU something back — that deadlocks). " +
-      "Use coms_poll(msg_id) to check an async send without blocking.",
+      "Ask one teammate a NEW question/task. (You do NOT need this to REPLY to a question " +
+      "someone asked you — just write your answer as your normal response; it is sent back " +
+      "automatically.) Returns a msg_id immediately and the answer arrives later as a " +
+      "follow-up message (always async — keep working / send to others; it never blocks). " +
+      "Use coms_poll(msg_id) to check the status without blocking.",
     parameters: Type.Object({
       target: Type.String({ description: "Teammate name (preferred, scoped to your project) or session_id." }),
       prompt: Type.String({ description: "The question or task." }),
-      wait: Type.Optional(Type.Boolean({ description: "Block until the answer lands (default false). See deadlock caveat." })),
       response_schema: Type.Optional(Type.Any({ description: "Optional JSON Schema; the teammate is asked to reply with matching JSON." })),
       conversation_id: Type.Optional(Type.String({ description: "Optional id to thread a multi-message exchange." })),
-      timeout_ms: Type.Optional(Type.Number({ description: "Override wait timeout (ms). Only used with wait=true." })),
     }),
     async execute(_id, params) {
       if (!identity) return errResult("coms-bus not initialised");
       const target = resolveTarget(params.target, identity.project);
       if (!target) return errResult(`coms: no live teammate "${params.target}"`);
+
+      // ── Reply safety net ──────────────────────────────────────────────────
+      // If we're currently servicing an inbound from THIS teammate, the agent
+      // is trying to reply via coms_send. That would open a new thread (new
+      // msg_id) and leave the asker's pending slot unresolved forever (the bug
+      // that wedged a team in testing). Re-route it as the proper response to
+      // the original request instead. agent_end then sees currentInbound===null
+      // and won't double-reply. Only same-asker is intercepted; sending to any
+      // OTHER teammate mid-turn is a normal new question (hops+1).
+      if (currentInbound &&
+          (target.session_id === currentInbound.from_session || target.name === currentInbound.from_name)) {
+        const inb = currentInbound;
+        let payload: unknown = params.prompt;
+        let error: string | null = null;
+        if (inb.response_schema) {
+          try { payload = JSON.parse(params.prompt); }
+          catch { error = "response not valid JSON"; payload = null; }
+        }
+        shipResponse(inb, payload, error);
+        currentInbound = null;
+        prompts.delete(inb.msg_id);
+        refreshWidget();
+        return {
+          content: [{ type: "text" as const, text: `Reply delivered to ${target.name} (routed as your answer to their question). Tip: you don't need coms_send to reply — just writing your response is sent back automatically.` }],
+          details: { replied_to: inb.msg_id, target: target.name, rerouted: true },
+        };
+      }
+
       const hops = currentInbound ? currentInbound.hops + 1 : 0;
       if (hops >= MAX_HOPS) return errResult(`coms: hop limit reached (${hops} >= ${MAX_HOPS})`);
 
@@ -621,16 +700,6 @@ export default function (pi: ExtensionAPI) {
       const sent = sendPrompt(target, msg_id, null, params.prompt, params.response_schema ?? null, params.conversation_id ?? null, hops);
       if (!sent) return errResult(`coms: failed to deliver to "${target.name}" (offline?)`);
 
-      if (params.wait === true) {
-        const p = pending.get(msg_id)!;
-        p.consumed = true;
-        const timeoutMs = typeof params.timeout_ms === "number" && params.timeout_ms > 0 ? params.timeout_ms : WAIT_TIMEOUT_MS;
-        const timed = new Promise<{ error: string }>(res => { const t = setTimeout(() => res({ error: "timeout" }), timeoutMs); (t as any).unref?.(); });
-        const winner = await Promise.race([p.promise, timed]);
-        if ((winner as any).error) return { content: [{ type: "text" as const, text: `coms_send → ${target.name}: ${(winner as any).error}` }], details: { msg_id, error: (winner as any).error }, isError: true };
-        const resp = (winner as any).response;
-        return { content: [{ type: "text" as const, text: typeof resp === "string" ? resp : JSON.stringify(resp, null, 2) }], details: { msg_id, target: target.name, response: resp } };
-      }
       return { content: [{ type: "text" as const, text: `coms_send → ${target.name}\nmsg_id ${msg_id}\nThe answer will arrive as a follow-up message. Use coms_poll("${msg_id}") to check, or keep working.` }], details: { msg_id, target: target.name, hops, async: true } };
     },
     renderCall(args, theme) {
@@ -799,11 +868,32 @@ export default function (pi: ExtensionAPI) {
       prompt, conversation_id, response_schema,
     };
     if (!deliverMessage(target, msg)) return false;
-    let resolveFn!: (v: { response?: unknown; error?: string | null }) => void;
-    const promise = new Promise<{ response?: unknown; error?: string | null }>(res => { resolveFn = res; });
-    pending.set(msg_id, { msg_id, group_id, target_name: target.name, created_at: nowIso(), resolve: resolveFn, promise, consumed: false });
+    pending.set(msg_id, { msg_id, group_id, target_name: target.name, created_at: nowIso() });
     pi.appendEntry("coms-bus-log", { event: "outbound_prompt", msg_id, to: target.name, group_id, hops });
     return true;
+  }
+
+  // Ship a `response` (the correct reply path) back to the asker, correlated by
+  // the original request's msg_id. Used by agent_end (turn's final text) and by
+  // coms_send's reply-to-current-asker safety net.
+  function shipResponse(inb: Inbound, payload: unknown, error: string | null): void {
+    if (!identity) return;
+    const target = resolveTarget(inb.from_session, identity.project) ?? resolveTarget(inb.from_name, identity.project);
+    if (!target) {
+      pi.appendEntry("coms-bus-log", { event: "response_drop_offline", msg_id: inb.msg_id, to: inb.from_name });
+      ackPrompt(inb.msg_id); // asker is gone; nothing to redeliver to
+      return;
+    }
+    const reply: Message = {
+      kind: "response", msg_id: inb.msg_id, group_id: inb.group_id,
+      from_session: identity.session_id, from_name: identity.name, from_cwd: identity.cwd,
+      to_name: target.name, hops: 0, ts: nowIso(),
+      response: payload, error,
+    };
+    try { deliverMessage(target, reply); }
+    catch { /* best-effort */ }
+    pi.appendEntry("coms-bus-log", { event: "outbound_response", msg_id: inb.msg_id, to: target.name, error });
+    ackPrompt(inb.msg_id); // reply shipped — safe to drop the .inflight claim
   }
 
   function errResult(text: string) {
@@ -893,6 +983,17 @@ export default function (pi: ExtensionAPI) {
     tick = setInterval(() => { onInboxChange(); refreshWidget(); }, TICK_MS); (tick as any).unref?.();
     joined = true;
     setComsToolsActive(true);
+    // Recover prompts a previous run with this name claimed but never answered
+    // (crash/kill mid-turn) so the asker isn't silently dropped on respawn.
+    for (const msg of recoverInflight(identity)) {
+      inboundQueue.push({
+        msg_id: msg.msg_id, group_id: msg.group_id, from_name: msg.from_name,
+        from_session: msg.from_session, hops: msg.hops,
+        response_schema: (msg.response_schema as object) ?? null,
+      });
+      deliverPrompt(msg);
+      pi.appendEntry("coms-bus-log", { event: "recovered_prompt", msg_id: msg.msg_id, from: msg.from_name });
+    }
     onInboxChange(); // pick up anything already queued
     refreshWidget();
     pi.appendEntry("coms-bus-log", { event: "join", name: identity.name, project: identity.project, session_id: identity.session_id });
@@ -946,6 +1047,64 @@ export default function (pi: ExtensionAPI) {
       latestCtx = latestCtx ?? (ctx as unknown as ExtensionContext);
       if (!joined) { ctx.ui.notify("coms: not on a bus.", "info"); return; }
       leaveBus();
+    },
+  });
+
+  // Tear down a whole team: signal every member to shut down (control message),
+  // then a pid-kill backstop (SIGTERM → SIGKILL) for any that ignore it, and a
+  // hard inbox purge. Works even if THIS session never joined the bus (e.g. an
+  // orchestrator that only spawned members via launch_agent) — identity may be
+  // null. Excludes self when on the same project.
+  function teardownProject(project: string): { signaled: string[]; targets: { name: string; pid: number }[] } {
+    const live = listLiveAgents(project).filter(e => !identity || e.session_id !== identity.session_id);
+    const signaled: string[] = [];
+    const targets: { name: string; pid: number }[] = [];
+    for (const e of live) {
+      const msg: Message = {
+        kind: "control", control: "shutdown", reason: "team-down",
+        msg_id: ulid(), group_id: null,
+        from_session: identity?.session_id ?? "human", from_name: identity?.name ?? "human",
+        from_cwd: identity?.cwd ?? process.cwd(), to_name: e.name, hops: 0, ts: nowIso(),
+      };
+      if (deliverMessage(e, msg)) signaled.push(e.name);
+      targets.push({ name: e.name, pid: e.pid });
+    }
+    pi.appendEntry("coms-bus-log", { event: "team_down", project, signaled });
+    // Backstop: members handle the control message by calling ctx.shutdown()
+    // (graceful). Anything still alive after a grace gets SIGTERM, then SIGKILL,
+    // then its presence + inbox are purged so the team is fully gone.
+    setTimeout(() => {
+      for (const { pid } of targets) if (pidAlive(pid)) { try { process.kill(pid, "SIGTERM"); } catch { /* ignore */ } }
+      setTimeout(() => {
+        for (const { name, pid } of targets) {
+          if (pidAlive(pid)) { try { process.kill(pid, "SIGKILL"); } catch { /* ignore */ } }
+          try { unlinkSync(registryPath(project, name)); } catch { /* ignore */ }
+          purgeInbox(project, name);
+        }
+      }, 3000).unref?.();
+    }, 4000).unref?.();
+    return { signaled, targets };
+  }
+
+  pi.registerCommand("team-down", {
+    description: "Dismiss a whole coms-bus team:  /team-down [project]  (lists teams if more than one).",
+    handler: async (args, ctx) => {
+      latestCtx = latestCtx ?? (ctx as unknown as ExtensionContext);
+      const arg = (args ?? "").trim();
+      const projects = listProjects().filter(p => listLiveAgents(p).length > 0);
+      if (projects.length === 0) { ctx.ui.notify("team-down: no live teams.", "info"); return; }
+      let target = arg;
+      if (!target) {
+        if (projects.length === 1) target = projects[0];
+        else {
+          const lines = projects.map(p => `  ${p}  (${listLiveAgents(p).length} member(s))`).join("\n");
+          ctx.ui.notify(`team-down: multiple teams — specify one:\n${lines}`, "warning");
+          return;
+        }
+      }
+      if (!projects.includes(target)) { ctx.ui.notify(`team-down: no live team "${target}".`, "warning"); return; }
+      const { signaled } = teardownProject(target);
+      ctx.ui.notify(`team-down "${target}": signaled ${signaled.length} member(s) to exit${signaled.length ? ` (${signaled.join(", ")})` : ""}. Pid-kill backstop in ~4s for any that ignore it.`, "info");
     },
   });
 

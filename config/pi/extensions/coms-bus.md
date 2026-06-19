@@ -16,16 +16,23 @@ touching how agents talk. The two compose but don't depend on each other.
 - **Tools** (available to every agent that loads the extension — fully
   bidirectional and peer-to-peer: orchestrator↔expert, expert↔expert):
   - `coms_list` — who's on the bus (name, purpose, model, live context%).
-  - `coms_send(target, prompt, wait?, response_schema?, conversation_id?)` —
-    ask one teammate. **Async by default**: returns a `msg_id` and the answer
-    arrives later as a follow-up message. `wait:true` blocks and returns inline.
+  - `coms_send(target, prompt, response_schema?, conversation_id?)` —
+    ask one teammate. **Always async**: returns a `msg_id` and the answer
+    arrives later as a follow-up message (it never blocks). Use `coms_poll` for
+    status. You do **not** use this to reply to a question someone asked you —
+    just write your answer as normal text (see Reply correlation).
   - `coms_broadcast(targets, prompt, response_schema?)` — ask many at once;
     returns `{group_id, msg_ids}`; each answer arrives as its own follow-up.
     `targets:["*"]` fans out to the whole team.
   - `coms_poll(msg_id|group_id)` — non-blocking status of an async send/broadcast.
   - `coms_shutdown(targets, reason?)` — dismiss teammate(s) when the work is
     done; `targets:["*"]` dismisses the whole team (never yourself).
-- **Command**: `/coms` — show the team pool + your inbox/pending counts.
+- **Commands**:
+  - `/coms` — show the team pool + your inbox/pending counts.
+  - `/coms-join [team] [as <name>]` / `/coms-leave` — join/leave at runtime.
+  - `/team-down [project]` — dismiss a whole team (lists teams if more than one);
+    graceful shutdown + a SIGTERM→SIGKILL pid-kill backstop. Works even from a
+    session that never joined the bus.
 - **Widget**: a team-pool card (project · you, inbox/pending, each peer with a
   live/stale dot, model, context%, queue depth).
 
@@ -84,9 +91,11 @@ auto-suffixed (`architect-2`).
 delivered later as a follow-up message (the same mechanism `tmux-subagent` uses
 for background results). This avoids a genuine **deadlock**: if an orchestrator
 *blocks* awaiting expert A, and A asks the orchestrator a sub-question, both wait
-forever. Async delivery lets turns interleave. `wait:true` exists as a blocking
-convenience for simple leaf calls where the callee can't call back — the tool
-description spells out the caveat.
+forever. Async delivery lets turns interleave. There is intentionally **no blocking
+send** — an earlier `wait:true` option was removed because it reintroduced
+exactly this deadlock (plus a simpler hang: a *reply* never gets replied to, so a
+blocking send waiting on one hung forever). Every send returns immediately; poll
+with `coms_poll` if you need status.
 
 ## The two roles in one process
 
@@ -110,7 +119,7 @@ answers on `agent_end`). There is no central process — coordination is
   multiple concurrent senders never corrupt a shared file.
 - **Presence is pruned by PID liveness** (`process.kill(pid,0)`): a crashed
   agent's registry entry is removed the next time anyone lists the project.
-- Filenames are timestamp-prefixed so `drainInbox` reads FIFO.
+- Filenames are timestamp-prefixed so `claimInbox` reads FIFO.
 
 Practical envelope: **dozens** of agents on one host comfortably. Past ~100 the
 O(N) registry scans and watcher fds start to matter; that's the trigger to move
@@ -124,14 +133,14 @@ sender                                   receiver
 coms_send / coms_broadcast
   resolveTarget(name|session)
   deliverMessage → inbox/<recv>/…json ─▶ fs.watch fires → onInboxChange
-  register Pending{msg_id, promise}        drainInbox → push to inboundQueue
+  register Pending{msg_id}                 claimInbox → rename .inflight, queue
                                            serviceNextInbound (idle-gated):
                                              sendMessage(followUp, triggerTurn)
                                              set currentInbound
                                            LLM runs a turn, produces an answer
   resolveResponse  ◀── inbox/<send>/…json   agent_end → extract last assistant
-  - resolve Pending.promise (for wait)        text → deliverMessage(response)
-  - if not consumed: deliver follow-up        clear currentInbound
+  - record Pending.result (for coms_poll)     text → shipResponse(msg_id)
+  - deliver answer as a follow-up             ackPrompt (delete .inflight)
 ```
 
 `response_schema` (if set on the prompt) asks the receiver to reply with JSON;
@@ -141,28 +150,73 @@ isn't valid JSON.
 Hop inheritance: a `coms_send` issued *while servicing an inbound* carries
 `hops = inbound.hops + 1`; `MAX_HOPS` (default 5) caps relay chains.
 
+## Reply correlation (answer in plain text)
+
+A reply is shipped **only** by the `agent_end` hook: when a member finishes the
+turn that serviced an inbound prompt, its final assistant text is delivered back
+as a `response` carrying the **original `msg_id`**, which resolves the asker's
+`pending` slot. So a member must *just write its answer as normal text*.
+
+The footgun this avoids: replying with `coms_send` opens a **new** thread (new
+`msg_id`), so the asker's request never resolves and it polls `pending` forever
+(this wedged a real team in testing). Two defenses:
+- the inbound prompt injected to the LLM says explicitly *"answer in plain text,
+  don't call coms_send to reply"*, and
+- `coms_send` has a **safety net**: a send to the teammate you're *currently
+  servicing* is re-routed via `shipResponse` as the proper answer (same
+  `msg_id`); `agent_end` then sees `currentInbound===null` and won't double-reply.
+  Sending to any *other* teammate mid-turn stays a normal new ask.
+
+## Durability (crash-safe inbox)
+
+A member can be killed mid-answer (`/team-down`, a manual kill, or a crash) and
+respawned — its unanswered question must not be lost. The inbox is a **two-phase
+ack**:
+
+1. **Claim** — `claimInbox` renames a serviced prompt `‹file›.json` →
+   `‹file›.json.inflight` instead of deleting it.
+2. **Ack** — `ackPrompt` deletes the `.inflight` file only after the reply has
+   shipped (inside `shipResponse`).
+3. **Recover** — on join, `recoverInflight` re-queues any leftover `.inflight`
+   files (a previous run died after claiming, before acking).
+
+`removeRegistry` **keeps a non-empty inbox** so the `.inflight` survives the
+death. And `serviceNextInbound` **re-queues** (never drops) a prompt if
+`pi.sendMessage` throws "already processing" — a respawned member's warmup turn
+can race recovery, so the recovered prompt is retried at the next idle /
+`agent_end` instead of being lost. Net effect: at-least-once delivery with crash
+recovery. Verified live (kill the moment a helper logs `inbound_prompt` but
+before `outbound_response`, respawn same `--cname` → it logs `recovered_prompt`
+and answers the same `msg_id`). Responses/control remain delete-on-read.
+
 ## Lifecycle & teardown
 
 A teammate is an ordinary long-lived pi session: it sits idle and only runs a
 turn when a coms prompt arrives. It **leaves the bus when its process ends** —
-`session_shutdown` (quit/reload/…) or `SIGINT`/`SIGTERM` runs `removeRegistry`
-(deletes its registry file + inbox dir). A hard kill leaves a stale entry, which
-PID-liveness pruning reaps on the next `coms_list`/widget render.
+`session_shutdown` (quit/reload/…) or `SIGINT`/`SIGTERM` runs `removeRegistry`,
+which deletes its registry file but **keeps a non-empty inbox** so a respawn with
+the same `--cname` can recover unanswered work (see Durability). A hard kill
+leaves a stale entry, which PID-liveness pruning reaps on the next
+`coms_list`/widget render.
 
-You shut a teammate down three ways:
+You shut a teammate down four ways:
 1. **Locally** — end that session (`/exit`, `Ctrl-C`, or kill its tmux window).
-2. **Remotely** — `coms_shutdown(targets|["*"])`. This delivers a
+2. **Remotely (by an agent)** — `coms_shutdown(targets|["*"])`: delivers a
    `kind:"control"` / `control:"shutdown"` message; the receiver drains it,
    shows a toast, and calls `ctx.shutdown()` on the next tick (50ms) so the
-   drain + any in-flight reply finish first. `ctx.shutdown()` fires
-   `session_shutdown`, so cleanup is the same as a local exit. `coms_shutdown`
-   never targets the caller.
-3. **Crash** — pruned automatically (above).
+   drain + any in-flight reply finish first. Never targets the caller.
+3. **By the human** — `/team-down [project]`: the same control-message broadcast
+   to every member, then a **SIGTERM→SIGKILL pid-kill backstop** (the registry
+   stores each pid) + inbox purge for anything that ignores the graceful signal.
+   Lists teams if more than one; works even from a session that never joined the
+   bus (`identity` may be null).
+4. **Crash** — pruned automatically (above).
 
-> Note: `coms_shutdown` only works on agents that stay alive as listeners
-> (their own pi sessions). `tmux-subagent`'s `launch_agent` is task-then-done
-> and kills the pane on `agent_end`, so it doesn't host persistent listeners —
-> that's the integration still to come (`coms_launch_team` + auto-enroll).
+> Integration with `tmux-subagent`: `launch_agent(team:"<project>", ...)` spawns
+> a **persistent** member that auto-joins via `PI_COMS_PROJECT`/`PI_COMS_CNAME`
+> env and stays alive as a listener. When such a member exits, `tmux-subagent`
+> **suppresses** the usual "finished" follow-up (its real output went over coms)
+> and shows only a quiet toast — so `/team-down` teardown isn't noisy.
 
 ## Busy/idle gating (correctness, not optimization)
 
@@ -186,7 +240,9 @@ in `inboundQueue` and are serviced one at a time after each `agent_end`.
    PID-liveness pruning reaps it on the next `coms_list`/widget render.
 4. **`os` tmp vs `~/.pi`** — unlike `tmux-subagent` (ephemeral `$TMPDIR`),
    coms-bus lives under `~/.pi/coms-bus` so presence persists across a session's
-   lifetime and is easy to inspect. Inbox files are transient (consumed on read).
+   lifetime and is easy to inspect. Prompt files are **claimed, not consumed**:
+   a serviced prompt becomes `<file>.inflight` and is deleted only after the
+   reply ships (durability); responses/control are delete-on-read.
 5. **Substrate is isolated.** Everything between the `SUBSTRATE` banners is the
    only code that changes for Redis. The tool surface above is substrate-agnostic.
 
@@ -199,7 +255,8 @@ Desktop). The tool surface stays identical. Mapping:
 | File-IPC piece | Redis primitive |
 |----------------|-----------------|
 | inbox dir + `fs.watch` | `SUBSCRIBE` / Streams `XREAD BLOCK` (true push) |
-| `pending` + reply file | reply on a `msg_id` channel; `BLPOP` for `wait` |
+| `pending` + reply file | reply on a `msg_id` channel (follow-up delivery) |
+| `.inflight` claim + `ackPrompt` | Stream consumer-group `XREADGROUP` + `XACK` |
 | `agents/*.json` + PID prune | `SET agent:<n> … EX 15` + heartbeat (TTL = presence) |
 | `coms_broadcast` fan-out | one `PUBLISH team:<x>` |
 | `coms_shutdown` control msg | `PUBLISH agent:<n>:control` |
@@ -215,6 +272,7 @@ pi -e config/pi/extensions/coms-bus.ts --cname listener --project demo
 
 # terminal 2 — the asker
 pi -e config/pi/extensions/coms-bus.ts --cname asker --project demo
-# then in the asker:  coms_send(target:"listener", prompt:"reply PONG", wait:true)
+# then in the asker:  coms_send(target:"listener", prompt:"reply PONG")
+# the answer arrives as a follow-up; coms_poll("<msg_id>") to check status
 ```
 `coms_list` from either side shows the other; the answer round-trips back.
