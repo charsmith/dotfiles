@@ -1,5 +1,5 @@
 {
-  "$schema": "https://unpkg.com/@aliou/pi-guardrails@0.13.2/schema.json",
+  "$schema": "https://unpkg.com/@aliou/pi-guardrails@0.14.0/schema.json",
   "onboarding": {
     "completed": true,
     "completedAt": "2026-06-09T16:57:48.629Z"
@@ -9,15 +9,15 @@
   },
   "pathAccess": {
     "allowedPaths": [
-      "~/code/",
-      "~/.dotfiles/",
-      "~/.config/",
-      "/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/examples/",
-      "/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/",
-      "/dev/null",
-      "/tmp/",
-      "/var/folders/dg/"
+      { "kind": "directory", "path": "~/code" },
+      { "kind": "directory", "path": "~/.dotfiles" },
+      { "kind": "directory", "path": "~/.config" },
+      { "kind": "directory", "path": "/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/examples" },
+      { "kind": "directory", "path": "/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent" },
+      { "kind": "file",      "path": "/dev/null" },
+      { "kind": "directory", "path": "/tmp" },
+      { "kind": "directory", "path": "/var/folders/dg" }
     ]
   },
-  "version": "0.9.0-20260327"
+  "version": "0.13.0-20260619"
 }
