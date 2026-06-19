@@ -537,6 +537,7 @@ export default function (pi: ExtensionAPI) {
     pi.appendEntry("coms-bus-log", { event: "inbound_response", msg_id: msg.msg_id, from: msg.from_name, error: msg.error ?? null });
     if (!p) return; // orphan (we restarted, or already cleaned up)
     p.result = { response: msg.response, error: msg.error ?? null };
+    pending.delete(msg.msg_id);  // resolved — remove so the widget count stays accurate
     // Sends are async — always surface the answer as a follow-up so the
     // orchestrator processes it in a fresh turn (deadlock-free).
     const tag = p.group_id ? ` (broadcast ${p.group_id})` : "";
