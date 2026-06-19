@@ -654,8 +654,9 @@ export default function (pi: ExtensionAPI) {
       "Ask one teammate a NEW question/task. (You do NOT need this to REPLY to a question " +
       "someone asked you — just write your answer as your normal response; it is sent back " +
       "automatically.) Returns a msg_id immediately and the answer arrives later as a " +
-      "follow-up message (always async — keep working / send to others; it never blocks). " +
-      "Use coms_poll(msg_id) to check the status without blocking.",
+      "follow-up message (always async — it never blocks). " +
+      "IMPORTANT: do NOT poll in a loop with sleep — the reply triggers a new turn automatically. " +
+      "Just call coms_send and stop; your next turn will contain the answer.",
     parameters: Type.Object({
       target: Type.String({ description: "Teammate name (preferred, scoped to your project) or session_id." }),
       prompt: Type.String({ description: "The question or task." }),
@@ -701,7 +702,7 @@ export default function (pi: ExtensionAPI) {
       const sent = sendPrompt(target, msg_id, null, params.prompt, params.response_schema ?? null, params.conversation_id ?? null, hops);
       if (!sent) return errResult(`coms: failed to deliver to "${target.name}" (offline?)`);
 
-      return { content: [{ type: "text" as const, text: `coms_send → ${target.name}\nmsg_id ${msg_id}\nThe answer will arrive as a follow-up message. Use coms_poll("${msg_id}") to check, or keep working.` }], details: { msg_id, target: target.name, hops, async: true } };
+      return { content: [{ type: "text" as const, text: `coms_send → ${target.name}  (msg_id: ${msg_id})\nDo NOT poll or sleep. The reply will arrive automatically as your next turn. Just wait.` }], details: { msg_id, target: target.name, hops, async: true } };
     },
     renderCall(args, theme) {
       const tgt = (args as any).target ?? "?";
