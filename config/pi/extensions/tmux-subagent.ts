@@ -548,7 +548,7 @@ export default function (pi: ExtensionAPI) {
     agent.watcher?.close();
     clearWidgetForAgent(agent.id);
     agents.delete(agent.id);
-    if (!Array.from(agents.values()).some(a => a.status === "running" || a.status === "stopped")) {
+    if (!Array.from(agents.values()).some(a => a.status === "running" || a.status === "stopped" || a.status === "idle")) {
       stopTicking();
       latestCtx?.ui.setWorkingVisible(true);
     }
