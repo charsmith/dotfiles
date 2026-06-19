@@ -171,6 +171,21 @@ tag on the name line so it's visually distinguishable in the TUI.
 
 ---
 
+## Team Management Tools
+
+These are first-class tools available in any session — no bus join required.
+Built as part of the wider team management work (catalog + `run_team`).
+
+| Tool | Description |
+|------|-------------|
+| `team_down(project)` | Gracefully shut down all members of a team. Reads the coms-bus registry, sends shutdown control messages, SIGTERM→SIGKILL backstop. Works from any session. |
+| `team_list()` | List active teams and their members (from registry). |
+| `run_team(charter, task)` | Launch a declared team charter against a task. Handles coordinator designation, work directory, guardrail confirmation. |
+
+`team_down` is the first thing to build — it unblocks clean teardown from the main thread today.
+
+---
+
 ## Implementation Order
 
 1. **`idle` status** — add to `AgentStatus`, write on `agent_end` for persistent
