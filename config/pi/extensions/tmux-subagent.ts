@@ -851,7 +851,19 @@ export default function (pi: ExtensionAPI) {
         try {
           launchTeamMember({
             name: member.agent,
-            task: isCoord ? params.input :
+            task: isCoord ? [
+              `You have been assigned a coordinated research task. Your team is available on the coms bus (project: "${project}").`,
+              ``,
+              `Task: ${params.input}`,
+              ``,
+              `Steps:`,
+              `1. Use coms_list to see available team members`,
+              `2. Delegate the task to the appropriate specialist via coms_send`,
+              `3. Wait for the reply — it arrives automatically as your next turn, do NOT poll`,
+              `4. Synthesize the findings`,
+              `5. Use the write tool to write your complete report to: ${workDir}/output.md`,
+              `6. Stop after writing output.md — do not write it as chat text, it must be a file`,
+            ].join("\n") :
               `You are a ${member.role || "specialist"} on team "${name}". ` +
               `Wait for instructions on coms bus project "${project}". ` +
               (member.description ? `Your role: ${member.description}` : ""),
