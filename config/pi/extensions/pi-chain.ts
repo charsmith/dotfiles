@@ -56,7 +56,7 @@
  */
 
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync, unlinkSync, watch, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, unlinkSync, watch, writeFileSync } from "node:fs";
 import type { FSWatcher } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -91,65 +91,143 @@ interface StepDef {
 
 interface ChainDef {
   name: string;
-  kind: string;
+  kind: "chain";
   description?: string;
   steps: StepDef[];
-  // Team lifetime: false (default) tears the agents down after the run returns
-  // (one-shot feel); true keeps them warm for the next run_chain of this chain.
   persist: boolean;
-  // Memory: true (default) starts each topic on a clean slate (ephemeral spawn);
-  // false keeps the agent alive across topics so context accumulates.
   clearContext: boolean;
 }
 
-function chainFiles(): string[] {
+interface TeamMemberDef {
+  agent: string;          // references an agent .md file
+  role?: string;          // coordinator | specialist | etc.
+  description?: string;
+  reports_to?: string;
+}
+
+interface TeamDef {
+  name: string;
+  kind: "team";
+  description?: string;
+  guardrail?: "confirm" | "auto" | "never";
+  persist?: boolean;
+  topology?: string;      // hub-spoke | mesh | chain | custom
+  entry_point?: string;  // agent name that receives the initial task
+  members: TeamMemberDef[];
+}
+
+function charterDirs(): string[] {
+  return [
+    path.join(os.homedir(), ".config", "pi", "charters"),
+    path.join(process.cwd(), ".pi", "charters"),
+  ];
+}
+
+// Back-compat: also read the old monolithic agent-chain.yaml if present.
+function legacyChainFiles(): string[] {
   return [
     path.join(os.homedir(), ".config", "pi", "agents", "agent-chain.yaml"),
     path.join(process.cwd(), ".pi", "agents", "agent-chain.yaml"),
   ];
 }
 
-// Load + validate all kind:chain definitions (first file wins on name clash).
-function loadChains(): { chains: Map<string, ChainDef>; errors: string[] } {
+// Parse a single charter block (raw object) into a ChainDef or TeamDef.
+// name = charter name (from filename or YAML key).
+function parseCharterBlock(
+  name: string, raw: any,
+  chains: Map<string, ChainDef>, teams: Map<string, TeamDef>, errors: string[],
+) {
+  if (!raw || typeof raw !== "object") return;
+  if (raw.kind === "chain") {
+    if (chains.has(name)) return;
+    if (!Array.isArray(raw.steps) || raw.steps.length === 0) {
+      errors.push(`chain "${name}": missing or empty steps`); return;
+    }
+    const steps: StepDef[] = [];
+    let ok = true;
+    for (let i = 0; i < raw.steps.length; i++) {
+      const s = raw.steps[i];
+      if (!s || typeof s !== "object" || typeof s.prompt !== "string") {
+        errors.push(`chain "${name}" step ${i + 1}: each step needs a "prompt" string`);
+        ok = false; break;
+      }
+      if (!s.agent && !s.system_prompt) {
+        errors.push(`chain "${name}" step ${i + 1}: needs "agent" or "system_prompt"`);
+        ok = false; break;
+      }
+      steps.push({
+        agent: s.agent, system_prompt: s.system_prompt, model: s.model, prompt: s.prompt,
+        clearContext: typeof s.clearContext === "boolean" ? s.clearContext : undefined,
+      });
+    }
+    if (ok) chains.set(name, {
+      name, kind: "chain", description: raw.description, steps,
+      persist: raw.persist === true,
+      clearContext: raw.clearContext !== false,
+    });
+  } else if (raw.kind === "team") {
+    if (teams.has(name)) return;
+    if (!Array.isArray(raw.members) || raw.members.length === 0) {
+      errors.push(`team "${name}": missing or empty members`); return;
+    }
+    const members: TeamMemberDef[] = raw.members
+      .filter((m: any) => m && typeof m.agent === "string")
+      .map((m: any) => ({ agent: m.agent, role: m.role, description: m.description, reports_to: m.reports_to }));
+    teams.set(name, {
+      name, kind: "team", description: raw.description,
+      guardrail: raw.guardrail ?? "confirm",
+      persist: raw.persist === true,
+      topology: raw.topology ?? "hub-spoke",
+      entry_point: raw.entry_point,
+      members,
+    });
+  }
+  // unknown kind: silently skip (forward-compat)
+}
+
+// Load + validate all charters from:
+//   ~/.config/pi/charters/<name>.yaml  (one charter per file, filename = name)
+//   .pi/charters/<name>.yaml           (project-local, same format)
+//   agent-chain.yaml                   (legacy monolithic, backward-compat)
+// First-seen wins on name clash.
+function loadCatalog(): { chains: Map<string, ChainDef>; teams: Map<string, TeamDef>; errors: string[] } {
   const chains = new Map<string, ChainDef>();
+  const teams  = new Map<string, TeamDef>();
   const errors: string[] = [];
-  for (const file of chainFiles()) {
+
+  // Per-file charters (primary format)
+  for (const dir of charterDirs()) {
+    if (!existsSync(dir)) continue;
+    let files: string[];
+    try { files = readdirSync(dir).filter(f => f.endsWith(".yaml") || f.endsWith(".yml")); }
+    catch { continue; }
+    for (const f of files) {
+      const name = f.replace(/\.ya?ml$/, "");
+      let raw: any;
+      try { raw = parseYaml(readFileSync(path.join(dir, f), "utf-8")); }
+      catch (e: any) { errors.push(`${f}: parse error: ${e?.message ?? e}`); continue; }
+      parseCharterBlock(name, raw, chains, teams, errors);
+    }
+  }
+
+  // Legacy: agent-chain.yaml (multi-charter per file, name = YAML key)
+  for (const file of legacyChainFiles()) {
     if (!existsSync(file)) continue;
     let doc: any;
     try { doc = parseYaml(readFileSync(file, "utf-8")); }
     catch (e: any) { errors.push(`${file}: parse error: ${e?.message ?? e}`); continue; }
     if (!doc || typeof doc !== "object") continue;
     for (const [name, raw] of Object.entries<any>(doc)) {
-      if (chains.has(name)) continue;
-      if (!raw || raw.kind !== "chain") continue;
-      if (!Array.isArray(raw.steps) || raw.steps.length === 0) {
-        errors.push(`chain "${name}": missing or empty steps`);
-        continue;
-      }
-      const steps: StepDef[] = [];
-      let ok = true;
-      for (let i = 0; i < raw.steps.length; i++) {
-        const s = raw.steps[i];
-        if (!s || typeof s !== "object" || typeof s.prompt !== "string") {
-          errors.push(`chain "${name}" step ${i + 1}: each step needs a "prompt" string`);
-          ok = false; break;
-        }
-        if (!s.agent && !s.system_prompt) {
-          errors.push(`chain "${name}" step ${i + 1}: needs "agent" or "system_prompt"`);
-          ok = false; break;
-        }
-        steps.push({
-          agent: s.agent, system_prompt: s.system_prompt, model: s.model, prompt: s.prompt,
-          clearContext: typeof s.clearContext === "boolean" ? s.clearContext : undefined,
-        });
-      }
-      if (ok) chains.set(name, {
-        name, kind: "chain", description: raw.description, steps,
-        persist: raw.persist === true,
-        clearContext: raw.clearContext !== false,  // default true
-      });
+      parseCharterBlock(name, raw, chains, teams, errors);
     }
   }
+
+  return { chains, teams, errors };
+}
+
+// Back-compat shim used by existing callers inside pi-chain.ts.
+function loadChains(): { chains: Map<string, ChainDef>; errors: string[] } {
+  const { chains, errors } = loadCatalog();
   return { chains, errors };
 }
 

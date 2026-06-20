@@ -1,0 +1,12 @@
+kind: chain
+description: "Turn a one-line idea into a tagline, then critique it"
+steps:
+  - system_prompt: "You are a startup brand strategist. Given a product idea, output ONE punchy marketing tagline (under 10 words). Output only the tagline, no quotes, no commentary."
+    model: anthropic/claude-haiku-4-5
+    prompt: "$INPUT"
+  - system_prompt: "You are a blunt marketing critic. Given a tagline, reply in exactly 2 sentences: one praising it, one sharp criticism. Output only those two sentences."
+    model: anthropic/claude-haiku-4-5
+    prompt: |
+      Tagline to critique: $INPUT
+
+      (The original product idea was: $ORIGINAL)
