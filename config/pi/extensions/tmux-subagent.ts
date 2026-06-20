@@ -856,7 +856,7 @@ export default function (pi: ExtensionAPI) {
         if (personaSource === "none") warnings.push(`"${member.agent}" has no agent.md and no description — launching without persona`);
         try {
           launchTeamMember({
-            name: `${member.agent} (${personaSource})`,
+            name: member.agent,
             task: isCoord ? [
               `You have been assigned a coordinated research task. Your team is available on the coms bus (project: "${project}").`,
               ``,
