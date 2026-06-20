@@ -962,10 +962,13 @@ export default function (pi: ExtensionAPI) {
   });
 
   // ── Tool activation: keep coms_* hidden until we're actually on a bus ───────
+  // team_down is always active — works without joining the bus.
+  const ALWAYS_ACTIVE_TOOLS = ["team_down"];
   function setComsToolsActive(on: boolean): void {
     try {
       const active = new Set(pi.getActiveTools());
       for (const t of COMS_TOOLS) { if (on) active.add(t); else active.delete(t); }
+      for (const t of ALWAYS_ACTIVE_TOOLS) active.add(t);
       pi.setActiveTools([...active]);
     } catch { /* ignore */ }
   }
@@ -1107,6 +1110,54 @@ export default function (pi: ExtensionAPI) {
       if (!projects.includes(target)) { ctx.ui.notify(`team-down: no live team "${target}".`, "warning"); return; }
       const { signaled } = teardownProject(target);
       ctx.ui.notify(`team-down "${target}": signaled ${signaled.length} member(s) to exit${signaled.length ? ` (${signaled.join(", ")})` : ""}. Pid-kill backstop in ~4s for any that ignore it.`, "info");
+    },
+  });
+
+  // ── team_down tool ────────────────────────────────────────────────────────
+  // Exposed as a tool (not just a command) so the LLM can tear down a team
+  // it launched without the user having to type /team-down manually.
+  // Works from any session — does not require being on the coms bus.
+
+  pi.registerTool({
+    name: "team_down",
+    label: "Team Down",
+    description:
+      "Gracefully shut down all members of a coms-bus team. " +
+      "Sends each member a shutdown signal, then applies a SIGTERM → SIGKILL " +
+      "backstop after ~4s for any that don't respond. Works from any session " +
+      "without needing to join the bus first. " +
+      "Use team_list() to see active teams and their members.",
+    promptSnippet: "Shut down a running agent team",
+    parameters: Type.Object({
+      project: Type.String({ description: "The team project name (same value passed as `team` to launch_agent)." }),
+    }),
+    async execute(_id, params) {
+      const projects = listProjects().filter(p => listLiveAgents(p).length > 0);
+      if (!projects.includes(params.project)) {
+        const hint = projects.length
+          ? `Active teams: ${projects.join(", ")}`
+          : "No active teams found.";
+        return { content: [{ type: "text" as const, text: `team_down: no live team "${params.project}". ${hint}` }], details: {}, isError: true };
+      }
+      const { signaled, targets } = teardownProject(params.project);
+      const msg = signaled.length
+        ? `Signaled ${signaled.length} member(s) to exit: ${signaled.join(", ")}. Pid-kill backstop fires in ~4s.`
+        : `No members responded to shutdown signal (${targets.length} targeted). Pid-kill backstop fires in ~4s.`;
+      return { content: [{ type: "text" as const, text: msg }], details: { project: params.project, signaled } };
+    },
+    renderCall(args, theme) {
+      return new Text(
+        theme.fg("toolTitle", theme.bold("team_down ")) + theme.fg("warning", (args as any).project ?? "?"),
+        0, 0,
+      );
+    },
+    renderResult(result, _opts, theme) {
+      const txt = result.content[0];
+      const msg = txt?.type === "text" ? txt.text : "done";
+      return new Text(
+        result.isError ? theme.fg("error", "✗ ") + msg : theme.fg("success", "✓ ") + theme.fg("muted", msg),
+        0, 0,
+      );
     },
   });
 
