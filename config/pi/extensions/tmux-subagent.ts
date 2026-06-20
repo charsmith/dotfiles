@@ -345,19 +345,27 @@ export default function (pi: ExtensionAPI) {
               return `${icon}\u202f${a.name}`;
             }).join("  ");
 
+            const pct   = budget ? Math.min(100, Math.round(spent / budget * 100)) : 0;
             let right = elapsed;
             if (budget) {
-              const pct  = Math.min(100, Math.round(spent / budget * 100));
               const BAR  = 12;
               const fill = Math.round(BAR * pct / 100);
               const bar  = "█".repeat(fill) + "░".repeat(BAR - fill);
               right = `$${spent.toFixed(2)}/$${budget.toFixed(2)}  ${bar} ${pct}%  ${elapsed}`;
             }
 
-            const inner2 = width - 4;
-            const left   = truncateToWidth(`${teamName}  ${memberIcons}`, inner2 - right.length - 2);
-            const gap    = " ".repeat(Math.max(1, inner2 - visibleWidth(left) - visibleWidth(right)));
-            const body   = " " + theme.fg("accent", left) + gap + theme.fg("dim", right) + " ";
+            const inner2    = width - 4;
+            // Right side shrinks gracefully: full → compact → elapsed only
+            const rightFull    = right;
+            const rightCompact = budget ? `$${spent.toFixed(2)}  ${pct}%  ${elapsed}` : elapsed;
+            const rightMin     = elapsed;
+            const rightStr     = visibleWidth(rightFull) < inner2 - 10 ? rightFull
+                               : visibleWidth(rightCompact) < inner2 - 10 ? rightCompact
+                               : rightMin;
+            const leftWidth  = Math.max(0, inner2 - visibleWidth(rightStr) - 2);
+            const left       = truncateToWidth(`${teamName}  ${memberIcons}`, leftWidth);
+            const gap        = " ".repeat(Math.max(1, inner2 - visibleWidth(left) - visibleWidth(rightStr)));
+            const body       = " " + theme.fg("accent", left) + gap + theme.fg("dim", rightStr) + " ";
 
             return [
               theme.fg("accent", "╔" + "═".repeat(width - 2) + "╗"),
