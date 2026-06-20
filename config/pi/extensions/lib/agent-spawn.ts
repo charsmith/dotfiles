@@ -518,16 +518,19 @@ export function spawnAgentWindow(opts: SpawnOptions): SpawnHandle {
     const unitId  = path.basename(workDir);
     const coordinatorInstructions = [
       "\n\n---",
-      "## Coordinator Instructions",
-      "You are the coordinator for this team.",
-      `Unit of work: ${unitId}`,
-      `Your task is in: ${workDir}/input.md`,
+      "## Your role: Team Coordinator",
       "",
-      "CRITICAL: When all work is complete, you MUST use the write tool to create",
-      `the file ${workDir}/output.md containing your final report.`,
-      "Do NOT write the report as plain chat text — it MUST be written to that file.",
-      "Your session signals completion by detecting that file on disk.",
-      "Do not create output.md until the work is fully done.",
+      "You are the coordinator for this team. Your responsibilities:",
+      "1. Read your task from: " + workDir + "/input.md",
+      "2. Delegate work to team specialists via the coms bus (coms_list shows who is available)",
+      "3. Send tasks with coms_send — replies arrive automatically as your next turn, do NOT poll",
+      "4. Synthesize all findings once the work is complete",
+      "5. Use the write tool to write your final report to: " + workDir + "/output.md",
+      "",
+      "CRITICAL OUTPUT RULE: You MUST use the write tool to create output.md at the path above.",
+      "Do NOT write the report as plain chat text — it must be a file on disk.",
+      "Your session detects completion by checking that file exists. No file = not done.",
+      "Do not create output.md until ALL work is complete and synthesized.",
     ].join("\n");
     personaPrompt = personaPrompt ? personaPrompt + coordinatorInstructions : coordinatorInstructions;
   }
