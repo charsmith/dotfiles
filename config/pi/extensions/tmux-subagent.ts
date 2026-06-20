@@ -427,13 +427,13 @@ export default function (pi: ExtensionAPI) {
         // Collect usage across all team members before teardown, then write info.md.
         if (agent.workDir) {
           try {
-            const rows: { name: string; usage: AgentUsage | undefined }[] = [
-              { name: agent.name, usage: state.usage ?? agent.usage },
+            const rows: { name: string; model: string | undefined; usage: AgentUsage | undefined }[] = [
+              { name: agent.name, model: agent.model, usage: state.usage ?? agent.usage },
             ];
             if (agent.teamProject) {
               for (const [, member] of agents) {
                 if (member !== agent && member.teamProject === agent.teamProject) {
-                  rows.push({ name: member.name, usage: member.usage });
+                  rows.push({ name: member.name, model: member.model, usage: member.usage });
                 }
               }
             }
@@ -448,7 +448,7 @@ export default function (pi: ExtensionAPI) {
             );
             const tableRows = rows.map(r => {
               const u = r.usage;
-              return `| ${r.name} | ${u?.turns ?? 0} | ${fmtTokens(u?.input ?? 0)} | ${fmtTokens(u?.output ?? 0)} | $${(u?.cost ?? 0).toFixed(3)} |`;
+              return `| ${r.name} | ${r.model ?? ""} | ${u?.turns ?? 0} | ${fmtTokens(u?.input ?? 0)} | ${fmtTokens(u?.output ?? 0)} | $${(u?.cost ?? 0).toFixed(3)} |`;
             }).join("\n");
             const elapsed = fmtElapsed(Date.now() - agent.startedAt);
             const info = [
@@ -461,10 +461,10 @@ export default function (pi: ExtensionAPI) {
               ``,
               `## Cost`,
               ``,
-              `| Agent | Turns | Input | Output | Cost |`,
-              `|-------|-------|-------|--------|------|`,
+              `| Agent | Model | Turns | Input | Output | Cost |`,
+              `|-------|-------|-------|-------|--------|------|`,
               tableRows,
-              `| **Total** | **${totals.turns}** | **${fmtTokens(totals.input)}** | **${fmtTokens(totals.output)}** | **$${totals.cost.toFixed(3)}** |`,
+              `| **Total** | | **${totals.turns}** | **${fmtTokens(totals.input)}** | **${fmtTokens(totals.output)}** | **$${totals.cost.toFixed(3)}** |`,
             ].join("\n");
             writeFileSync(path.join(agent.workDir, "info.md"), info, "utf-8");
           } catch { /* ignore — don't let info.md failure block teardown */ }
