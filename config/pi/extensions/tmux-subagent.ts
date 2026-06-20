@@ -849,10 +849,14 @@ export default function (pi: ExtensionAPI) {
       for (const member of [...workers, coordMember]) {
         const isCoord = member.agent === coordName;
         const agentDef = loadAgentDef(member.agent);
-        if (!agentDef) warnings.push(`"${member.agent}" has no agent.md — launching without persona`);
+        // Persona resolution: agent.md file > explicit system_prompt > description fallback
+        const inlinePrompt = member.system_prompt ??
+          (agentDef ? undefined : member.description ?? undefined);
+        const personaSource = agentDef ? "file" : (inlinePrompt ? "inline" : "none");
+        if (personaSource === "none") warnings.push(`"${member.agent}" has no agent.md and no description — launching without persona`);
         try {
           launchTeamMember({
-            name: member.agent,
+            name: `${member.agent} (${personaSource})`,
             task: isCoord ? [
               `You have been assigned a coordinated research task. Your team is available on the coms bus (project: "${project}").`,
               ``,
@@ -871,6 +875,7 @@ export default function (pi: ExtensionAPI) {
               (member.description ? `Your role: ${member.description}` : ""),
             team: project,
             agentDef,
+            systemPrompt: inlinePrompt,
             coordinator: isCoord,
             workDir: isCoord ? workDir : undefined,
             budget: isCoord ? budget : undefined,

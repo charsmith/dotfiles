@@ -597,14 +597,14 @@ export default function (pi: ExtensionAPI) {
       // Reuse a warm team only if it's for this same chain; otherwise tear the
       // stale one down before starting.
       if (liveTeam && liveTeam.chainName !== def.name) teardownLiveTeam();
-      if (!liveTeam) liveTeam = { chainName: def.name, members: def.steps.map(() => null) };
+      if (!liveTeam) liveTeam = { chainName: def.name, members: def.members.map(() => null) };
       const team = liveTeam;
 
       // Build the run + widget.
       cancelDismiss();
       run = {
         name: def.name,
-        steps: def.steps.map((s, i) => ({ label: s.agent || s.system_prompt ? (s.agent || `step ${i + 1}`) : `step ${i + 1}`, status: "pending" as StepStatus })),
+        steps: def.members.map((s, i) => ({ label: s.agent || s.system_prompt ? (s.agent || `step ${i + 1}`) : `step ${i + 1}`, status: "pending" as StepStatus })),
         current: 0,
         startedAt: Date.now(),
         status: "running",
@@ -618,9 +618,9 @@ export default function (pi: ExtensionAPI) {
       let finalOutput = "";
 
       try {
-        for (let i = 0; i < def.steps.length; i++) {
+        for (let i = 0; i < def.members.length; i++) {
           run.current = i;
-          const step = def.steps[i];
+          const step = def.members[i];
           const stepRun = run.steps[i];
           const prompt = fillTemplate(step.prompt, input, original);
 
@@ -674,7 +674,7 @@ export default function (pi: ExtensionAPI) {
       }
 
       run.status = "done";
-      run.current = def.steps.length - 1;
+      run.current = def.members.length - 1;
       run.finishedAt = Date.now();
       // Warm when the chain persists and at least one member is still alive.
       run.warm = !!def.persist && !!liveTeam && liveTeam.members.some(m => m !== null);
@@ -685,8 +685,8 @@ export default function (pi: ExtensionAPI) {
       scheduleDismiss();
 
       return {
-        content: [{ type: "text", text: `Chain "${def.name}" completed ${def.steps.length} step${def.steps.length > 1 ? "s" : ""}${def.persist ? " (team kept warm — /chain-down to stop)" : ""}.\n\n${finalOutput || "(no output)"}` }],
-        details: { chain: def.name, steps: def.steps.length, persist: def.persist },
+        content: [{ type: "text", text: `Chain "${def.name}" completed ${def.members.length} step${def.members.length > 1 ? "s" : ""}${def.persist ? " (team kept warm — /chain-down to stop)" : ""}.\n\n${finalOutput || "(no output)"}` }],
+        details: { chain: def.name, steps: def.members.length, persist: def.persist },
       };
     },
 

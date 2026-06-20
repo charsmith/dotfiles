@@ -2,7 +2,7 @@ kind: chain
 description: "Persistent tagline->critique team you can feed many ideas"
 persist: true
 clearContext: true
-steps:
+members:
   - system_prompt: "You are a startup brand strategist. Given a product idea, output ONE punchy marketing tagline (under 10 words). Output only the tagline, no quotes, no commentary."
     model: anthropic/claude-haiku-4-5
     prompt: "$INPUT"
