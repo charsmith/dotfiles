@@ -56,7 +56,7 @@
  */
 
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, watch, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, watch, writeFileSync } from "node:fs";
 import type { FSWatcher } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -78,163 +78,24 @@ import {
   sanitizeAgentName,
   type SpawnHandle,
   spawnAgentWindow,
-  trackSpawnedAgent,
   TmuxSpawnError,
   windowForPane,
 } from "./lib/agent-spawn.ts";
-import { parseYaml } from "./lib/mini-yaml.ts";
+// parseYaml is used by lib/catalog-loader.ts — not needed directly here
 
 // ─── Chain definitions ───────────────────────────────────────────────────────
 
-interface StepDef {
-  agent?: string;          // agent definition name (~/.config/pi/agents/<name>.md)
-  system_prompt?: string;  // inline persona (alternative to agent)
-  model?: string;          // optional per-step model override
-  prompt: string;          // template; $INPUT / $ORIGINAL are substituted
-  clearContext?: boolean;  // per-step override of the chain-level clearContext
-}
-
-interface ChainDef {
-  name: string;
-  kind: "chain";
-  description?: string;
-  steps: StepDef[];
-  persist: boolean;
-  clearContext: boolean;
-}
-
-interface TeamMemberDef {
-  agent: string;          // references an agent .md file
-  role?: string;          // coordinator | specialist | etc.
-  description?: string;
-  reports_to?: string;
-}
-
-interface TeamDef {
-  name: string;
-  kind: "team";
-  description?: string;
-  guardrail?: "confirm" | "auto" | "never";
-  persist?: boolean;
-  topology?: string;      // hub-spoke | mesh | chain | custom
-  entry_point?: string;  // agent name that receives the initial task
-  members: TeamMemberDef[];
-}
-
-function charterDirs(): string[] {
-  return [
-    path.join(os.homedir(), ".config", "pi", "charters"),
-    path.join(process.cwd(), ".pi", "charters"),
-  ];
-}
-
-// Back-compat: also read the old monolithic agent-chain.yaml if present.
-function legacyChainFiles(): string[] {
-  return [
-    path.join(os.homedir(), ".config", "pi", "agents", "agent-chain.yaml"),
-    path.join(process.cwd(), ".pi", "agents", "agent-chain.yaml"),
-  ];
-}
-
-// Parse a single charter block (raw object) into a ChainDef or TeamDef.
-// name = charter name (from filename or YAML key).
-function parseCharterBlock(
-  name: string, raw: any,
-  chains: Map<string, ChainDef>, teams: Map<string, TeamDef>, errors: string[],
-) {
-  if (!raw || typeof raw !== "object") return;
-  if (raw.kind === "chain") {
-    if (chains.has(name)) return;
-    if (!Array.isArray(raw.steps) || raw.steps.length === 0) {
-      errors.push(`chain "${name}": missing or empty steps`); return;
-    }
-    const steps: StepDef[] = [];
-    let ok = true;
-    for (let i = 0; i < raw.steps.length; i++) {
-      const s = raw.steps[i];
-      if (!s || typeof s !== "object" || typeof s.prompt !== "string") {
-        errors.push(`chain "${name}" step ${i + 1}: each step needs a "prompt" string`);
-        ok = false; break;
-      }
-      if (!s.agent && !s.system_prompt) {
-        errors.push(`chain "${name}" step ${i + 1}: needs "agent" or "system_prompt"`);
-        ok = false; break;
-      }
-      steps.push({
-        agent: s.agent, system_prompt: s.system_prompt, model: s.model, prompt: s.prompt,
-        clearContext: typeof s.clearContext === "boolean" ? s.clearContext : undefined,
-      });
-    }
-    if (ok) chains.set(name, {
-      name, kind: "chain", description: raw.description, steps,
-      persist: raw.persist === true,
-      clearContext: raw.clearContext !== false,
-    });
-  } else if (raw.kind === "team") {
-    if (teams.has(name)) return;
-    if (!Array.isArray(raw.members) || raw.members.length === 0) {
-      errors.push(`team "${name}": missing or empty members`); return;
-    }
-    const members: TeamMemberDef[] = raw.members
-      .filter((m: any) => m && typeof m.agent === "string")
-      .map((m: any) => ({ agent: m.agent, role: m.role, description: m.description, reports_to: m.reports_to }));
-    teams.set(name, {
-      name, kind: "team", description: raw.description,
-      guardrail: raw.guardrail ?? "confirm",
-      persist: raw.persist === true,
-      topology: raw.topology ?? "hub-spoke",
-      entry_point: raw.entry_point,
-      members,
-    });
-  }
-  // unknown kind: silently skip (forward-compat)
-}
-
-// Load + validate all charters from:
-//   ~/.config/pi/charters/<name>.yaml  (one charter per file, filename = name)
-//   .pi/charters/<name>.yaml           (project-local, same format)
-//   agent-chain.yaml                   (legacy monolithic, backward-compat)
-// First-seen wins on name clash.
-function loadCatalog(): { chains: Map<string, ChainDef>; teams: Map<string, TeamDef>; errors: string[] } {
-  const chains = new Map<string, ChainDef>();
-  const teams  = new Map<string, TeamDef>();
-  const errors: string[] = [];
-
-  // Per-file charters (primary format)
-  for (const dir of charterDirs()) {
-    if (!existsSync(dir)) continue;
-    let files: string[];
-    try { files = readdirSync(dir).filter(f => f.endsWith(".yaml") || f.endsWith(".yml")); }
-    catch { continue; }
-    for (const f of files) {
-      const name = f.replace(/\.ya?ml$/, "");
-      let raw: any;
-      try { raw = parseYaml(readFileSync(path.join(dir, f), "utf-8")); }
-      catch (e: any) { errors.push(`${f}: parse error: ${e?.message ?? e}`); continue; }
-      parseCharterBlock(name, raw, chains, teams, errors);
-    }
-  }
-
-  // Legacy: agent-chain.yaml (multi-charter per file, name = YAML key)
-  for (const file of legacyChainFiles()) {
-    if (!existsSync(file)) continue;
-    let doc: any;
-    try { doc = parseYaml(readFileSync(file, "utf-8")); }
-    catch (e: any) { errors.push(`${file}: parse error: ${e?.message ?? e}`); continue; }
-    if (!doc || typeof doc !== "object") continue;
-    for (const [name, raw] of Object.entries<any>(doc)) {
-      parseCharterBlock(name, raw, chains, teams, errors);
-    }
-  }
-
-  return { chains, teams, errors };
-}
-
-// Back-compat shim used by existing callers inside pi-chain.ts.
-function loadChains(): { chains: Map<string, ChainDef>; errors: string[] } {
-  const { chains, errors } = loadCatalog();
-  return { chains, errors };
-}
+import {
+  type ChainDef,
+  charterDirs,
+  legacyChainFiles,
+  loadCatalog,
+  loadChains,
+  parseCharterBlock,
+  type StepDef,
+  type TeamDef,
+  type TeamMemberDef,
+} from "./lib/catalog-loader.ts";
 
 // Single-pass $INPUT / $ORIGINAL substitution (safe if the input text itself
 // contains a "$INPUT"/"$ORIGINAL" literal).
@@ -834,161 +695,6 @@ export default function (pi: ExtensionAPI) {
       const body = txt?.type === "text" ? txt.text : "(done)";
       const icon = result.isError ? theme.fg("error", "✗ ") : theme.fg("success", "✓ ");
       return new Text(icon + theme.fg("muted", body), 0, 0);
-    },
-  });
-
-  // ── run_charter tool ─────────────────────────────────────────────────────────
-
-  // runTeam: spawn all charter members via trackSpawnedAgent so they get
-  // widget cards, coordinator detection, auto-teardown — all from
-  // tmux-subagent.ts. Returns immediately (non-blocking); coordinator
-  // follow-up arrives when output.md is written (see pollAgentState).
-  function runTeam(
-    def: TeamDef,
-    input: string,
-    budget: number,
-  ): { content: { type: "text"; text: string }[]; details: Record<string, unknown>; isError?: boolean } {
-    const workDir  = path.join(agentTeamsWorkdir(), def.name, makeUnitOfWorkId(input));
-    mkdirSync(workDir, { recursive: true });
-    writeFileSync(path.join(workDir, "input.md"), input, "utf-8");
-
-    const coordName = def.entry_point ??
-      def.members.find(m => m.role === "coordinator")?.agent ??
-      def.members[0].agent;
-    const project = `${sanitizeAgentName(def.name)}-${Date.now().toString(36)}`;
-
-    const workers = def.members.filter(m => m.agent !== coordName);
-    const coordMember = def.members.find(m => m.agent === coordName) ?? def.members[0];
-    const spawnErr: string[] = [];
-
-    for (const member of [...workers, coordMember]) {
-      const isCoord = member.agent === coordName;
-      const agentDef = loadAgentDef(member.agent);
-      const extraEnv: Record<string, string> = {
-        PI_COMS_PROJECT: project,
-        PI_COMS_CNAME: sanitizeAgentName(member.agent),
-      };
-      if (member.description) extraEnv.PI_COMS_PURPOSE = member.description;
-      if (isCoord) { extraEnv.PI_COORDINATOR = "1"; extraEnv.PI_WORK_DIR = workDir; }
-      try {
-        const handle = spawnAgentWindow({
-          name: member.agent,
-          task: isCoord ? input :
-            `You are a ${member.role || "specialist"} on team "${def.name}". ` +
-            `Wait for instructions on coms bus project "${project}". ` +
-            (member.description ? `Your role: ${member.description}` : ""),
-          persistent: true, agentDef: agentDef ?? undefined, extraEnv,
-          coordinatorWorkDir: isCoord ? workDir : undefined,
-        });
-        trackSpawnedAgent(handle, {
-          name: member.agent,
-          task: isCoord ? input : `[${def.name}] ${member.role || "specialist"}`,
-          mode: "team",
-          isCoordinator: isCoord,
-          teamProject: project,
-          workDir: isCoord ? workDir : undefined,
-          budget: isCoord ? budget : undefined,
-        });
-      } catch (err: any) { spawnErr.push(`Spawn "${member.agent}": ${err?.message ?? err}`); }
-    }
-
-    if (spawnErr.length) {
-      return { content: [{ type: "text", text: `Team spawn failed:\n${spawnErr.join("\n")}` }], details: {}, isError: true };
-    }
-
-    const memberList = def.members.map(m => m.agent + (m.agent === coordName ? " [coordinator]" : "")).join(", ");
-    return {
-      content: [{ type: "text", text:
-        `Team "${def.name}" launched — ${def.members.length} members: ${memberList}.\n` +
-        `Work dir: ${workDir}\n` +
-        `The coordinator will deliver a follow-up when done (budget: $${budget.toFixed(2)}).`
-      }],
-      details: { charter: def.name, workDir, project, budget },
-    };
-  }
-
-    pi.registerTool({
-    name: "run_charter",
-    label: "Run Charter",
-    description:
-      "Run a declared charter (team or chain) against a task. " +
-      "Chains run as sequential pipelines; teams launch hub-spoke coordination. " +
-      "A budget cap (USD, default $20) pauses and asks to continue or stop with a partial report. " +
-      "Charters live in ~/.config/pi/charters/. Use catalog_list() to see what's available.",
-    promptSnippet: "Run a declared agent charter (team or chain) against a task",
-    parameters: Type.Object({
-      charter: Type.String({ description: "Charter name (from ~/.config/pi/charters/)." }),
-      input:   Type.String({ description: "The task or question to work on." }),
-      budget:  Type.Optional(Type.Number({ description: "Spending cap in USD (default $20.00). Pauses if reached." })),
-    }),
-    async execute(_id, params, signal, onUpdate, ctx) {
-      latestCtx = ctx;
-      if (process.env.PI_SUBAGENT && !process.env.PI_AGENT_SPAWN) {
-        return { content: [{ type: "text", text: "Error: subagents cannot run charters." }], details: {}, isError: true };
-      }
-      const spendBudget = typeof params.budget === "number" ? params.budget : 20.00;
-      const { chains, teams, errors } = loadCatalog();
-      const name = params.charter;
-      const chain = chains.get(name);
-      if (chain) {
-        if (liveTeam && liveTeam.chainName !== name) teardownLiveTeam();
-        if (!liveTeam) liveTeam = { chainName: name, members: chain.steps.map(() => null) };
-        const team = liveTeam;
-        cancelDismiss();
-        run = { name, steps: chain.steps.map((s, i) => ({ label: s.agent || `step ${i+1}`, status: "pending" as StepStatus })), current: 0, startedAt: Date.now(), status: "running", persist: !!chain.persist };
-        refreshWidget(); startTick();
-        const original = params.input; let input = params.input; let finalOutput = ""; let totalCost = 0;
-        try {
-          for (let i = 0; i < chain.steps.length; i++) {
-            run.current = i;
-            const step = chain.steps[i]; const stepRun = run.steps[i];
-            const prompt = fillTemplate(step.prompt, input, original);
-            const clearCtx = step.clearContext ?? chain.clearContext;
-            let res: StepResult;
-            if (clearCtx) { res = await runStep(step, prompt, stepRun, signal); }
-            else { const r = await runPersistentStep(step, prompt, stepRun, team.members[i], signal); team.members[i] = r.member; res = r.result; }
-            totalCost += res.usage?.cost ?? 0;
-            if (totalCost >= spendBudget) {
-              const choice = await ctx.ui.select(`Chain "${name}" spent $${totalCost.toFixed(3)} — budget $${spendBudget.toFixed(2)} reached.`,
-                [`Continue (raise to $${(spendBudget * 2).toFixed(2)})`, "Stop here"]);
-              if (!choice?.startsWith("Continue")) {
-                run.status = "done"; run.finishedAt = Date.now(); refreshWidget(); if (!chain.persist) teardownLiveTeam(); scheduleDismiss();
-                return { content: [{ type: "text", text: `Chain "${name}" stopped at budget. Last output:\n\n${finalOutput || "(none yet)"}` }], details: { chain: name } };
-              }
-            }
-            if (res.isError) {
-              stepRun.status = "error"; stepRun.note = res.reason || "step failed"; run.status = "error"; run.finishedAt = Date.now(); refreshWidget();
-              if (!chain.persist) teardownLiveTeam(); scheduleDismiss();
-              return { content: [{ type: "text", text: `Chain "${name}" failed at step ${i+1}: ${stepRun.note}` }], details: { chain: name, failedStep: i+1 }, isError: true };
-            }
-            stepRun.status = "done"; stepRun.elapsedMs = stepRun.startedAt ? Date.now() - stepRun.startedAt : undefined;
-            refreshWidget(); input = res.output; finalOutput = res.output;
-          }
-        } catch (err: any) {
-          run.status = "error"; run.finishedAt = Date.now(); refreshWidget(); if (!chain.persist) teardownLiveTeam(); scheduleDismiss();
-          return { content: [{ type: "text", text: `Chain "${name}" errored: ${err?.message ?? err}` }], details: {}, isError: true };
-        }
-        run.status = "done"; run.finishedAt = Date.now(); refreshWidget(); if (!chain.persist) teardownLiveTeam(); scheduleDismiss();
-        return { content: [{ type: "text", text: `Charter (chain) "${name}" completed.\n\n${finalOutput}` }], details: { chain: name, cost: totalCost } };
-      }
-      const teamDef = teams.get(name);
-      if (teamDef) return runTeam(teamDef, params.input, spendBudget);
-      const avail = [...chains.keys(), ...teams.keys()].join(", ") || "(none)";
-      return { content: [{ type: "text", text: `Charter "${name}" not found. Available: ${avail}${errors.length ? `\nErrors: ${errors.join("; ")}` : ""}` }], details: {}, isError: true };
-    },
-    renderCall(args, theme, context) {
-      const name = (args as any).charter ?? "?";
-      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      if (!context.argsComplete) {
-        text.setText(theme.fg("dim", "→ ") + theme.fg("toolTitle", theme.bold("run_charter ")) + theme.fg("warning", "⟳ composing…"));
-      } else {
-        text.setText(theme.fg("accent", "→ ") + theme.fg("toolTitle", theme.bold("run_charter ")) + theme.fg("accent", name));
-      }
-      return text;
-    },
-    renderResult(result, _opts, theme) {
-      if (result.isError) return new Text(theme.fg("error", "✗ ") + theme.fg("muted", result.content[0]?.text ?? ""), 0, 0);
-      return new Text(theme.fg("success", "✓ ") + theme.fg("muted", result.content[0]?.text.split("\n")[0] ?? ""), 0, 0);
     },
   });
 

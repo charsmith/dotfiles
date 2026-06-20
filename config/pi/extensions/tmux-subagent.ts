@@ -70,6 +70,12 @@ import { Type } from "typebox";
 // Shared spawn/IPC primitive — the "one link" both this extension and
 // pi-chain.ts build on. See lib/agent-spawn.ts.
 import {
+  type ChainDef,
+  loadCatalog,
+  type TeamDef,
+  type TeamMemberDef,
+} from "./lib/catalog-loader.ts";
+import {
   agentTeamsWorkdir,
   type AgentDef,
   type AgentPrompt,
@@ -81,14 +87,11 @@ import {
   isPaneAlive,
   loadAgentDef,
   makeUnitOfWorkId,
-  registerAgentTracker,
   sanitizeAgentName,
   sendKeysToPane,
   shortModelName,
   type SpawnHandle,
   spawnAgentWindow,
-  type TrackAgentOpts,
-  trackSpawnedAgent,
   TmuxSpawnError,
   windowForPane,
 } from "./lib/agent-spawn.ts";
@@ -723,27 +726,174 @@ export default function (pi: ExtensionAPI) {
     if (tickInterval) { clearInterval(tickInterval); tickInterval = null; tickCount = 0; }
   }
 
-  // ── Cross-extension agent tracker ────────────────────────────────────────
-  // Registers this extension so orchestrators (run_charter in pi-chain.ts)
-  // can spawn agents that get full widget cards + coordinator machinery.
+  // ── Shared team-member launcher (used by launch_agent + run_charter) ──────
+  // Both tools call this so agents always get widget cards, coordinator
+  // detection, and auto-teardown from the same code path.
 
-  function registerTrackedAgent(handle: SpawnHandle, opts: TrackAgentOpts): void {
+  function launchTeamMember(opts: {
+    name: string;
+    task: string;
+    team: string;
+    agentDef?: AgentDef | null;
+    systemPrompt?: string;
+    coordinator?: boolean;
+    workDir?: string;
+    budget?: number;
+    model?: string;
+  }, ctx: ExtensionContext): { id: string; windowTarget: string; safeName: string } {
+    const safeName = sanitizeAgentName(opts.name);
+    const extraEnv: Record<string, string> = {
+      PI_COMS_PROJECT: opts.team,
+      PI_COMS_CNAME: safeName,
+    };
+    const purpose = (opts.agentDef?.description || opts.systemPrompt || "").replace(/[\r\n\t]+/g, " ").trim().slice(0, 100);
+    if (purpose) extraEnv.PI_COMS_PURPOSE = purpose;
+    if (process.env.PI_COMS_BUS_DIR) extraEnv.PI_COMS_BUS_DIR = process.env.PI_COMS_BUS_DIR;
+    if (opts.coordinator) {
+      extraEnv.PI_COORDINATOR = "1";
+      if (opts.workDir) extraEnv.PI_WORK_DIR = opts.workDir;
+    }
+
+    const handle = spawnAgentWindow({
+      name: opts.name,
+      task: opts.task,
+      persistent: true,
+      model: opts.model,
+      sessionModel: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
+      agentDef: opts.agentDef ?? undefined,
+      systemPrompt: opts.systemPrompt,
+      extraEnv,
+      coordinatorWorkDir: opts.coordinator ? opts.workDir : undefined,
+    });
+
     const agent: AgentEntry = {
       id: handle.id, name: opts.name, windowName: handle.windowName,
-      task: opts.teamProject ? `[team:${opts.teamProject}] ${opts.task}` : opts.task,
-      mode: opts.mode, windowTarget: handle.windowTarget, paneId: handle.paneId,
+      task: `[team:${opts.team}] ${opts.task}`,
+      mode: "team", windowTarget: handle.windowTarget, paneId: handle.paneId,
       extFile: handle.extFile, stateFile: handle.stateFile, inboxFile: handle.inboxFile,
       status: "running", startedAt: handle.startedAt, model: handle.modelLabel,
-      isCoordinator: opts.isCoordinator, teamProject: opts.teamProject,
-      workDir: opts.workDir, budget: opts.budget,
+      isCoordinator: opts.coordinator,
+      teamProject: opts.team,
+      workDir: opts.workDir,
+      budget: opts.coordinator ? opts.budget : undefined,
     };
     agents.set(handle.id, agent);
     agent.watcher = startWatching(agent);
     setWidgetForAgent(agent);
     startTicking();
-    latestCtx?.ui.setWorkingVisible(false);
+    ctx.ui.setWorkingVisible(false);
+    return { id: handle.id, windowTarget: handle.windowTarget, safeName };
   }
-  registerAgentTracker(registerTrackedAgent);
+
+  // ── run_charter tool ─────────────────────────────────────────────────────
+
+  pi.registerTool({
+    name: "run_charter",
+    label: "Run Charter",
+    description:
+      "Run a declared charter (team or chain) against a task. " +
+      "Teams launch hub-spoke agent coordination and return immediately — " +
+      "the coordinator delivers a follow-up when done. " +
+      "Chains run as sequential pipelines via run_chain. " +
+      "A budget cap (USD, default $20) is enforced for teams. " +
+      "Charters live in ~/.config/pi/charters/. Use catalog_list() to see what's available.",
+    promptSnippet: "Run a declared agent charter (team or chain) against a task",
+    parameters: Type.Object({
+      charter: Type.String({ description: "Charter name (from ~/.config/pi/charters/)." }),
+      input:   Type.String({ description: "The task or question to work on." }),
+      budget:  Type.Optional(Type.Number({ description: "Spending cap in USD (default $20.00)." })),
+    }),
+    async execute(_id, params, _signal, _onUpdate, ctx) {
+      latestCtx = ctx;
+      if (process.env.PI_SUBAGENT && !process.env.PI_AGENT_SPAWN) {
+        return { content: [{ type: "text" as const, text: "Error: subagents cannot run charters." }], details: {}, isError: true };
+      }
+      const budget = typeof params.budget === "number" ? params.budget : 20.00;
+      const { chains, teams, errors } = loadCatalog();
+      const name = params.charter;
+
+      // Chain: delegate to run_chain by informing user (chains have their own
+      // flow widget and warm-team logic in pi-chain.ts).
+      if (chains.has(name)) {
+        return {
+          content: [{ type: "text" as const, text: `"${name}" is a chain — use run_chain("${name}", input) to run it with the full flow widget.` }],
+          details: { kind: "chain", charter: name },
+        };
+      }
+
+      const teamDef = teams.get(name);
+      if (!teamDef) {
+        const avail = [...chains.keys(), ...teams.keys()].join(", ") || "(none)";
+        return { content: [{ type: "text" as const, text: `Charter "${name}" not found. Available: ${avail}${errors.length ? `\nErrors: ${errors.join("; ")}` : ""}` }], details: {}, isError: true };
+      }
+
+      // Team: spawn all members using launchTeamMember — same code path as
+      // launch_agent(team:...) so widget cards, coordinator detection, and
+      // auto-teardown all work.
+      const coordName = teamDef.entry_point ??
+        teamDef.members.find(m => m.role === "coordinator")?.agent ??
+        teamDef.members[0].agent;
+      const project = `${sanitizeAgentName(name)}-${Date.now().toString(36)}`;
+      const workdir  = agentTeamsWorkdir();
+      const unitId   = makeUnitOfWorkId(params.input);
+      const workDir  = path.join(workdir, name, unitId);
+      mkdirSync(workDir, { recursive: true });
+      writeFileSync(path.join(workDir, "input.md"), params.input, "utf-8");
+
+      const spawnErr: string[] = [];
+      const workers = teamDef.members.filter(m => m.agent !== coordName);
+      const coordMember = teamDef.members.find(m => m.agent === coordName) ?? teamDef.members[0];
+
+      // Spawn workers first, then coordinator
+      for (const member of [...workers, coordMember]) {
+        const isCoord = member.agent === coordName;
+        const agentDef = loadAgentDef(member.agent);
+        try {
+          launchTeamMember({
+            name: member.agent,
+            task: isCoord ? params.input :
+              `You are a ${member.role || "specialist"} on team "${name}". ` +
+              `Wait for instructions on coms bus project "${project}". ` +
+              (member.description ? `Your role: ${member.description}` : ""),
+            team: project,
+            agentDef,
+            coordinator: isCoord,
+            workDir: isCoord ? workDir : undefined,
+            budget: isCoord ? budget : undefined,
+          }, ctx);
+        } catch (err: any) { spawnErr.push(`Spawn "${member.agent}": ${err?.message ?? err}`); }
+      }
+
+      if (spawnErr.length) {
+        return { content: [{ type: "text" as const, text: `Team spawn errors:\n${spawnErr.join("\n")}` }], details: {}, isError: true };
+      }
+
+      const memberList = teamDef.members
+        .map(m => m.agent + (m.agent === coordName ? " [coordinator]" : "")).join(", ");
+      return {
+        content: [{ type: "text" as const, text:
+          `Team "${name}" launched — ${teamDef.members.length} members: ${memberList}.\n` +
+          `Work dir: ${workDir}\n` +
+          `The coordinator will deliver a follow-up when done (budget: $${budget.toFixed(2)}).`
+        }],
+        details: { charter: name, workDir, project, budget },
+      };
+    },
+    renderCall(args, theme, context) {
+      const n = (args as any).charter ?? "?";
+      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+      if (!context.argsComplete) {
+        text.setText(theme.fg("dim", "→ ") + theme.fg("toolTitle", theme.bold("run_charter ")) + theme.fg("warning", "⟳ composing…"));
+      } else {
+        text.setText(theme.fg("accent", "→ ") + theme.fg("toolTitle", theme.bold("run_charter ")) + theme.fg("accent", n));
+      }
+      return text;
+    },
+    renderResult(result, _opts, theme) {
+      if (result.isError) return new Text(theme.fg("error", "✗ ") + theme.fg("muted", result.content[0]?.text ?? ""), 0, 0);
+      return new Text(theme.fg("success", "✓ ") + theme.fg("muted", result.content[0]?.text.split("\n")[0] ?? ""), 0, 0);
+    },
+  });
 
   // ── launch_agent tool ────────────────────────────────────────────────────
 
@@ -837,43 +987,47 @@ export default function (pi: ExtensionAPI) {
         }
       }
 
-      // Team members auto-join the coms-bus via env vars (coms-bus.ts activates
-      // on PI_COMS_PROJECT/PI_COMS_CNAME). The cname must match the window's
-      // safeName, so derive both with the shared sanitizeAgentName().
-      const safeName = sanitizeAgentName(params.name);
-      const extraEnv: Record<string, string> = {};
-      let coordinatorWorkDir: string | undefined;
+      // Team members: use launchTeamMember() — the same function run_charter
+      // calls, so widget cards, coordinator detection, and auto-teardown are
+      // guaranteed to work identically for both tools.
       if (isTeam) {
-        extraEnv.PI_COMS_PROJECT = params.team!;
-        extraEnv.PI_COMS_CNAME   = safeName;
-        const purpose = (agentDef?.description || params.system_prompt || "").replace(/[\r\n\t]+/g, " ").trim().slice(0, 100);
-        if (purpose) extraEnv.PI_COMS_PURPOSE = purpose;
-        if (process.env.PI_COMS_BUS_DIR) extraEnv.PI_COMS_BUS_DIR = process.env.PI_COMS_BUS_DIR;
-
+        let coordinatorWorkDir: string | undefined;
         if (params.coordinator) {
-          const workdir = agentTeamsWorkdir();
-          const unitId  = makeUnitOfWorkId(params.task);
-          coordinatorWorkDir = path.join(workdir, params.team!, unitId);
+          const unitId = makeUnitOfWorkId(params.task);
+          coordinatorWorkDir = path.join(agentTeamsWorkdir(), params.team!, unitId);
           mkdirSync(coordinatorWorkDir, { recursive: true });
           writeFileSync(path.join(coordinatorWorkDir, "input.md"), params.task, "utf-8");
-          extraEnv.PI_COORDINATOR = "1";
-          extraEnv.PI_WORK_DIR    = coordinatorWorkDir;
         }
+        let launched;
+        try {
+          launched = launchTeamMember({
+            name: params.name,
+            task: params.task,
+            team: params.team!,
+            agentDef,
+            systemPrompt: params.system_prompt,
+            coordinator: params.coordinator === true,
+            workDir: coordinatorWorkDir,
+            model: params.model,
+          }, ctx);
+        } catch (err: any) {
+          return { content: [{ type: "text", text: `Error: failed to launch team member: ${(err as Error).message}` }], details: {}, isError: true };
+        }
+        return {
+          content: [{ type: "text", text: `Team member "${params.name}" joined "${params.team}" (${launched.windowTarget}) and is warming up. Talk to it with coms_send(target:"${launched.safeName}", ...) once you're on the bus (/ag:bus-join ${params.team}). It will keep running until dismissed (coms_shutdown) or its window closes.` }],
+          details: { id: launched.id, windowTarget: launched.windowTarget, mode: effectiveMode, team: params.team, cname: launched.safeName },
+        };
       }
 
-      // Spawn the window + wire the IPC via the shared "one link" primitive.
+      // Non-team: spawn directly
+      const safeName = sanitizeAgentName(params.name);
       let handle;
       try {
         handle = spawnAgentWindow({
-          name: params.name,
-          task: params.task,
-          persistent: isTeam,
+          name: params.name, task: params.task, persistent: false,
           model: params.model,
           sessionModel: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
-          agentDef,
-          systemPrompt: params.system_prompt,
-          extraEnv,
-          coordinatorWorkDir,
+          agentDef, systemPrompt: params.system_prompt, extraEnv: {},
         });
       } catch (err: any) {
         const text = err instanceof TmuxSpawnError
@@ -885,31 +1039,14 @@ export default function (pi: ExtensionAPI) {
       const { id, windowName, windowTarget, paneId, extFile, stateFile, inboxFile, startedAt } = handle;
 
       const agent: AgentEntry = {
-        id, name: params.name, windowName,
-        task: isTeam ? `[team:${params.team}] ${params.task}` : params.task,
-        mode: effectiveMode,
-        windowTarget, paneId, extFile, stateFile, inboxFile,
-        status: "running", startedAt,
-        model: handle.modelLabel,
-        isCoordinator: isTeam && params.coordinator === true,
-        teamProject: isTeam ? params.team : undefined,
-        workDir: coordinatorWorkDir,
+        id, name: params.name, windowName, task: params.task,
+        mode: effectiveMode, windowTarget, paneId, extFile, stateFile, inboxFile,
+        status: "running", startedAt, model: handle.modelLabel,
       };
       agents.set(id, agent);
-
       agent.watcher = startWatching(agent);
       setWidgetForAgent(agent);
       startTicking();
-
-      if (isTeam) {
-        // Persistent coms member: returns now; it lives until it exits / is
-        // dismissed (coms_shutdown) / its window closes.
-        ctx.ui.setWorkingVisible(false);
-        return {
-          content: [{ type: "text", text: `Team member "${params.name}" joined "${params.team}" (${windowTarget}) and is warming up. Talk to it with coms_send(target:"${safeName}", ...) once you're on the bus (/coms-join ${params.team}). It will keep running until dismissed (coms_shutdown) or its window closes.` }],
-          details: { id, windowTarget, windowName, mode: effectiveMode, team: params.team, cname: safeName },
-        };
-      }
 
       if (mode === "background") {
         // Returns now; the result lands later as a follow-up message.
