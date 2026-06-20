@@ -656,6 +656,10 @@ export default function (pi: ExtensionAPI) {
         agent.status = state.status;
         agent.model  = state.model ? shortModelName(state.model) : agent.model;
         agent.usage  = state.usage;
+        // Chain steps own their own cleanup — the chain runner reads the output
+        // and deletes the state file itself. If we call finishAgent here we race
+        // and delete the state file before the chain runner can read it.
+        if (agent.chainProject) { setWidgetForAgent(agent); return; }
         finishAgent(agent, state.output, state.status === "error");
         return;
       }
@@ -1097,7 +1101,7 @@ ${finalOutput}` }],
       input:   Type.String({ description: "The task or question to work on." }),
       budget:  Type.Optional(Type.Number({ description: "Spending cap in USD (default $20.00)." })),
     }),
-    async execute(_id, params, _signal, _onUpdate, ctx) {
+    async execute(_id, params, signal, onUpdate, ctx) {
       latestCtx = ctx;
       if (process.env.PI_SUBAGENT && !process.env.PI_AGENT_SPAWN) {
         return { content: [{ type: "text" as const, text: "Error: subagents cannot run charters." }], details: {}, isError: true };
