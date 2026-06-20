@@ -1024,7 +1024,7 @@ export default function (pi: ExtensionAPI) {
 
   // ── Commands ──────────────────────────────────────────────────────────────
 
-  pi.registerCommand("agents", {
+  pi.registerCommand("ag:agents", {
     description: "List all tracked subagents and their current status",
     handler: async (_args, ctx) => {
       if (agents.size === 0) { ctx.ui.notify("No active agents.", "info"); return; }
@@ -1038,7 +1038,7 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  pi.registerCommand("agents-clear", {
+  pi.registerCommand("ag:agents-clear", {
     description: "Remove finished/failed agents from the widget stack",
     handler: async (_args, ctx) => {
       let removed = 0;

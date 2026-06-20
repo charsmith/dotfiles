@@ -947,7 +947,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   // ── /coms command ────────────────────────────────────────────────────────
-  pi.registerCommand("coms", {
+  pi.registerCommand("ag:bus", {
     description: "Show the coms-bus team pool (peers, presence, your inbox/pending).",
     handler: async (_args, ctx) => {
       latestCtx = ctx;
@@ -1030,7 +1030,7 @@ export default function (pi: ExtensionAPI) {
   function shutdown(): void { leaveBus({ silent: true }); }
 
   // ── Runtime join/leave commands ────────────────────────────────────────────
-  pi.registerCommand("coms-join", {
+  pi.registerCommand("ag:bus-join", {
     description: "Join a coms-bus team now (no restart):  /coms-join [team] [as <name>] [explicit]",
     handler: async (args, ctx) => {
       latestCtx = latestCtx ?? (ctx as unknown as ExtensionContext);
@@ -1046,7 +1046,7 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  pi.registerCommand("coms-leave", {
+  pi.registerCommand("ag:bus-leave", {
     description: "Leave the current coms-bus team (the session keeps running).",
     handler: async (_args, ctx) => {
       latestCtx = latestCtx ?? (ctx as unknown as ExtensionContext);
@@ -1091,7 +1091,7 @@ export default function (pi: ExtensionAPI) {
     return { signaled, targets };
   }
 
-  pi.registerCommand("team-down", {
+  pi.registerCommand("ag:team-down", {
     description: "Dismiss a whole coms-bus team:  /team-down [project]  (lists teams if more than one).",
     handler: async (args, ctx) => {
       latestCtx = latestCtx ?? (ctx as unknown as ExtensionContext);

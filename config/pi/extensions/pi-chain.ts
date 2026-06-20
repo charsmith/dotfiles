@@ -834,7 +834,7 @@ export default function (pi: ExtensionAPI) {
 
   // ── Commands ─────────────────────────────────────────────────────────────────
 
-  pi.registerCommand("chain", {
+  pi.registerCommand("ag:chain", {
     description: "Set the active chain (pick from agent-chain.yaml).",
     handler: async (args, ctx) => {
       latestCtx = ctx;
@@ -856,7 +856,7 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  pi.registerCommand("chain-list", {
+  pi.registerCommand("ag:chains", {
     description: "List all defined chains and their steps.",
     handler: async (_args, ctx) => {
       latestCtx = ctx;
@@ -872,7 +872,7 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  pi.registerCommand("chain-down", {
+  pi.registerCommand("ag:chain-down", {
     description: "Shut down the warm (persistent) chain team, if any.",
     handler: async (_args, ctx) => {
       latestCtx = ctx;
@@ -889,7 +889,7 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  pi.registerCommand("chain-reset", {
+  pi.registerCommand("ag:chain-reset", {
     description: "Clear the current chain run from the flow widget.",
     handler: async (_args, ctx) => {
       latestCtx = ctx;
@@ -902,7 +902,7 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  pi.registerCommand("chain-show", {
+  pi.registerCommand("ag:chain-show", {
     description: "Re-show the last chain run's flow widget after it auto-dismissed.",
     handler: async (_args, ctx) => {
       latestCtx = ctx;

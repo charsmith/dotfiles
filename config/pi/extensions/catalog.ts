@@ -11,7 +11,7 @@
  * No index file — always in sync with the source files.
  */
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -439,7 +439,7 @@ export default function (pi: ExtensionAPI) {
 
   // ── /catalog command ────────────────────────────────────────────────────────
 
-  pi.registerCommand("catalog", {
+  pi.registerCommand("ag:catalog", {
     description: "List all agents, chains, and teams.  /catalog [agent|chain|team]  or  /catalog <name>",
     handler: async (args, ctx) => {
       const arg = (args ?? "").trim();
@@ -489,6 +489,111 @@ export default function (pi: ExtensionAPI) {
       }
 
       ctx.ui.notify(lines.join("\n"), "info");
+    },
+  });
+
+  // ── agent_author ────────────────────────────────────────────────────────
+
+  pi.registerTool({
+    name: "agent_author",
+    label: "Agent Author",
+    description:
+      "Write or update an agent definition at ~/.config/pi/agents/<name>.md. " +
+      "Validates frontmatter before writing. Creates a .bak backup if the file exists. " +
+      "Always use this instead of writing agent files directly.",
+    promptSnippet: "Create or update an agent definition",
+    parameters: Type.Object({
+      name: Type.String({ description: "Agent name (becomes the filename, no .md extension)." }),
+      content: Type.String({ description: "Full .md file content including YAML frontmatter (--- ... ---) and system prompt body." }),
+      overwrite: Type.Optional(Type.Boolean({ description: "Set true to overwrite an existing agent. Default: false (errors if exists)." })),
+    }),
+    async execute(_id, params) {
+      const safeName = params.name.replace(/[^a-zA-Z0-9_-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+      const dir  = path.join(os.homedir(), ".config", "pi", "agents");
+      const dest = path.join(dir, `${safeName}.md`);
+
+      // Validate frontmatter
+      const fmMatch = params.content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+      if (!fmMatch) return { content: [{ type: "text" as const, text: "Error: content must start with YAML frontmatter (--- ... ---)." }], details: {}, isError: true };
+      const fm: Record<string, string> = {};
+      for (const line of fmMatch[1].split(/\r?\n/)) {
+        const idx = line.indexOf(":");
+        if (idx > 0) fm[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+      }
+      if (!fm.name) return { content: [{ type: "text" as const, text: "Error: frontmatter must include a 'name' field." }], details: {}, isError: true };
+      if (!fm.description) return { content: [{ type: "text" as const, text: "Error: frontmatter must include a 'description' field." }], details: {}, isError: true };
+
+      if (existsSync(dest) && !params.overwrite) {
+        return { content: [{ type: "text" as const, text: `Error: agent "${safeName}" already exists. Pass overwrite:true to replace it.` }], details: {}, isError: true };
+      }
+      if (existsSync(dest)) {
+        // Backup before overwrite
+        writeFileSync(`${dest}.bak.${Date.now()}`, readFileSync(dest, "utf-8"), "utf-8");
+      }
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(dest, params.content, "utf-8");
+      return { content: [{ type: "text" as const, text: `Agent "${safeName}" written to ${dest}` }], details: { path: dest } };
+    },
+    renderCall(args, theme) {
+      return new Text(theme.fg("toolTitle", theme.bold("agent_author ")) + theme.fg("accent", (args as any).name ?? "?"), 0, 0);
+    },
+    renderResult(result, _opts, theme) {
+      return new Text(result.isError ? theme.fg("error", "✗ ") + result.content[0]?.text : theme.fg("success", "✓ ") + theme.fg("muted", result.content[0]?.text ?? ""), 0, 0);
+    },
+  });
+
+  // ── charter_author ─────────────────────────────────────────────────────
+
+  pi.registerTool({
+    name: "charter_author",
+    label: "Charter Author",
+    description:
+      "Write a new charter (team or chain) to ~/.config/pi/charters/<name>.yaml. " +
+      "Validates structure before writing. Creates a .bak backup if overwriting. " +
+      "The yaml_content must be the charter body only (no top-level name key — the filename is the name). " +
+      "Always use this instead of writing charter files directly.",
+    promptSnippet: "Create or update a team or chain charter",
+    parameters: Type.Object({
+      name: Type.String({ description: "Charter name (becomes the filename, no .yaml extension)." }),
+      yaml_content: Type.String({ description: "Charter YAML body. Must include 'kind: chain' or 'kind: team' at the top level." }),
+      overwrite: Type.Optional(Type.Boolean({ description: "Set true to overwrite an existing charter. Default: false." })),
+    }),
+    async execute(_id, params) {
+      const safeName = params.name.replace(/[^a-zA-Z0-9_-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+      const dir  = path.join(os.homedir(), ".config", "pi", "charters");
+      const dest = path.join(dir, `${safeName}.yaml`);
+
+      // Basic validation
+      const errs: string[] = [];
+      const kindMatch = params.yaml_content.match(/^kind:\s*(\S+)/m);
+      if (!kindMatch) { errs.push("Missing 'kind: chain' or 'kind: team'"); }
+      else {
+        const kind = kindMatch[1];
+        if (kind === "chain") {
+          if (!/steps:/m.test(params.yaml_content)) errs.push("kind:chain requires a 'steps' list");
+        } else if (kind === "team") {
+          if (!/members:/m.test(params.yaml_content)) errs.push("kind:team requires a 'members' list");
+        } else {
+          errs.push(`Unknown kind: "${kind}". Use 'chain' or 'team'.`);
+        }
+      }
+      if (errs.length) return { content: [{ type: "text" as const, text: `Validation errors:\n${errs.map(e => `  • ${e}`).join("\n")}` }], details: { errors: errs }, isError: true };
+
+      if (existsSync(dest) && !params.overwrite) {
+        return { content: [{ type: "text" as const, text: `Error: charter "${safeName}" already exists. Pass overwrite:true to replace it.` }], details: {}, isError: true };
+      }
+      if (existsSync(dest)) {
+        writeFileSync(`${dest}.bak.${Date.now()}`, readFileSync(dest, "utf-8"), "utf-8");
+      }
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(dest, params.yaml_content.trimEnd() + "\n", "utf-8");
+      return { content: [{ type: "text" as const, text: `Charter "${safeName}" written to ${dest}` }], details: { path: dest, kind: kindMatch?.[1] } };
+    },
+    renderCall(args, theme) {
+      return new Text(theme.fg("toolTitle", theme.bold("charter_author ")) + theme.fg("accent", (args as any).name ?? "?"), 0, 0);
+    },
+    renderResult(result, _opts, theme) {
+      return new Text(result.isError ? theme.fg("error", "✗ ") + result.content[0]?.text : theme.fg("success", "✓ ") + theme.fg("muted", result.content[0]?.text ?? ""), 0, 0);
     },
   });
 }
