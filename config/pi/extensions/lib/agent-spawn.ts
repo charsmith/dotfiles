@@ -518,13 +518,16 @@ export function spawnAgentWindow(opts: SpawnOptions): SpawnHandle {
     const unitId  = path.basename(workDir);
     const coordinatorInstructions = [
       "\n\n---",
+      "## Coordinator Instructions",
       "You are the coordinator for this team.",
       `Unit of work: ${unitId}`,
       `Your task is in: ${workDir}/input.md`,
-      "When all work is complete:",
-      `  1. Write your final report to ${workDir}/output.md`,
-      "  2. Your session will signal completion automatically — do not exit.",
-      "Do not write output.md until the work is fully done.",
+      "",
+      "CRITICAL: When all work is complete, you MUST use the write tool to create",
+      `the file ${workDir}/output.md containing your final report.`,
+      "Do NOT write the report as plain chat text — it MUST be written to that file.",
+      "Your session signals completion by detecting that file on disk.",
+      "Do not create output.md until the work is fully done.",
     ].join("\n");
     personaPrompt = personaPrompt ? personaPrompt + coordinatorInstructions : coordinatorInstructions;
   }
