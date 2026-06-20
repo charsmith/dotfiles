@@ -226,11 +226,14 @@ export function sanitizeAgentName(name: string): string {
 export interface TrackAgentOpts {
   name: string;
   task: string;
-  mode: "team" | "background";
+  mode: "team" | "background" | "blocking";
   isCoordinator?: boolean;
   teamProject?: string;
+  chainProject?: string;    // set for chain steps
+  chainStep?: number;       // 1-based step index
+  chainTotal?: number;      // total steps
   workDir?: string;
-  budget?: number;          // spending cap in USD (coordinator agents only)
+  budget?: number;
 }
 
 type TrackFn = (handle: SpawnHandle, opts: TrackAgentOpts) => void;

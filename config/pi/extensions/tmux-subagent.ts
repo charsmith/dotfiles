@@ -112,6 +112,9 @@ interface AgentEntry {
   mode: AgentMode;
   isCoordinator?: boolean;   // designated coordinator of a team
   teamProject?: string;      // coms-bus project name (set for team members)
+  chainProject?: string;     // chain run id (set for chain steps)
+  chainStep?: number;        // 1-based step index within the chain
+  chainTotal?: number;       // total steps in the chain
   workDir?: string;          // work directory for coordinator agents
   budget?: number;           // spending cap in USD (coordinator agents only)
   windowTarget: string;
@@ -331,7 +334,18 @@ export default function (pi: ExtensionAPI) {
             return result;
           };
 
-          // Team banner spanning full width.
+          // Catppuccin Mocha raw ANSI colors for banners.
+          // theme.fg() only covers semantic tokens; we use raw RGB for exact palette colors.
+          const ansi  = (rgb: string) => `\x1b[38;2;${rgb}m`;
+          const reset = "\x1b[0m";
+          const BLUE   = ansi("137;180;250");  // catppuccin blue   — teams
+          const MAUVE  = ansi("203;166;247");  // catppuccin mauve  — chains
+          const DIM    = ansi("108;112;134");  // catppuccin overlay0 — dim text
+
+          const colorBanner = (color: string, inner: number, body: string): string =>
+            color + "║" + reset + body + color + "║" + reset;
+
+          // Team banner (blue).
           const renderTeamBanner = (project: string, members: AgentEntry[]): string[] => {
             // Strip the timestamp suffix to get the human name.
             const teamName = project.replace(/-[a-z0-9]{8}$/, "");
@@ -365,25 +379,54 @@ export default function (pi: ExtensionAPI) {
             const leftWidth  = Math.max(0, inner2 - visibleWidth(rightStr) - 2);
             const left       = truncateToWidth(`${teamName}  ${memberIcons}`, leftWidth);
             const gap        = " ".repeat(Math.max(1, inner2 - visibleWidth(left) - visibleWidth(rightStr)));
-            const body       = " " + theme.fg("accent", left) + gap + theme.fg("dim", rightStr) + " ";
+            const body       = " " + BLUE + left + reset + gap + DIM + rightStr + reset + " ";
 
             return [
-              theme.fg("accent", "╔" + "═".repeat(width - 2) + "╗"),
-              theme.fg("accent", "║") + body + theme.fg("accent", "║"),
-              theme.fg("accent", "╚" + "═".repeat(width - 2) + "╝"),
+              BLUE + "╔" + "═".repeat(width - 2) + "╗" + reset,
+              colorBanner(BLUE, width - 2, body),
+              BLUE + "╚" + "═".repeat(width - 2) + "╝" + reset,
+            ];
+          };
+
+          // Chain banner (mauve/purple).
+          const renderChainBanner = (chainId: string, steps: AgentEntry[]): string[] => {
+            const chainName = chainId.replace(/-[0-9a-f]{6,}$/, "");  // strip run id suffix
+            const total     = steps[0]?.chainTotal ?? steps.length;
+            const done      = steps.filter(a => displayStatus(a) === "done" || displayStatus(a) === "completed").length;
+            const current   = steps.find(a => displayStatus(a) === "running" || displayStatus(a) === "working");
+            const elapsed   = fmtElapsed(Date.now() - Math.min(...steps.map(a => a.startedAt)));
+            const progress  = `step ${done + 1}/${total}`;
+            const BAR = 16;
+            const fill = Math.round(BAR * done / Math.max(1, total));
+            const bar  = "█".repeat(fill) + "░".repeat(BAR - fill);
+            const stepName  = current?.name ?? steps[done]?.name ?? "";
+
+            const right    = `${bar} ${done}/${total}  ${elapsed}`;
+            const inner2   = width - 4;
+            const leftStr  = truncateToWidth(`${chainName}  ${progress}${stepName ? `  → ${stepName}` : ""}`, Math.max(0, inner2 - visibleWidth(right) - 2));
+            const gap      = " ".repeat(Math.max(1, inner2 - visibleWidth(leftStr) - visibleWidth(right)));
+            const body     = " " + MAUVE + leftStr + reset + gap + DIM + right + reset + " ";
+
+            return [
+              MAUVE + "╔" + "═".repeat(width - 2) + "╗" + reset,
+              colorBanner(MAUVE, width - 2, body),
+              MAUVE + "╚" + "═".repeat(width - 2) + "╝" + reset,
             ];
           };
 
           const sorted = Array.from(agents.values()).sort((a, b) => a.startedAt - b.startedAt);
 
-          // Group by team project (preserving insertion order).
-          const teamMap = new Map<string, AgentEntry[]>();
+          // Group by team project, chain project, or standalone.
+          const teamMap  = new Map<string, AgentEntry[]>();
+          const chainMap = new Map<string, AgentEntry[]>();
           const standalone: AgentEntry[] = [];
           for (const agent of sorted) {
             if (agent.teamProject) {
               const g = teamMap.get(agent.teamProject) ?? [];
-              g.push(agent);
-              teamMap.set(agent.teamProject, g);
+              g.push(agent); teamMap.set(agent.teamProject, g);
+            } else if (agent.chainProject) {
+              const g = chainMap.get(agent.chainProject) ?? [];
+              g.push(agent); chainMap.set(agent.chainProject, g);
             } else {
               standalone.push(agent);
             }
@@ -402,11 +445,18 @@ export default function (pi: ExtensionAPI) {
 
           const lines: string[] = [];
 
-          // Teams: banner + tiled member cards.
+          // Teams: blue banner + tiled member cards.
           for (const [project, members] of teamMap) {
             if (lines.length > 0) lines.push("");
             lines.push(...renderTeamBanner(project, members));
             lines.push(...tileCards(members));
+          }
+
+          // Chains: mauve banner + tiled step cards.
+          for (const [chainId, steps] of chainMap) {
+            if (lines.length > 0) lines.push("");
+            lines.push(...renderChainBanner(chainId, steps));
+            lines.push(...tileCards(steps));
           }
 
           // Standalone agents: tiled rows.
@@ -881,6 +931,154 @@ export default function (pi: ExtensionAPI) {
     return { id: handle.id, windowTarget: handle.windowTarget, safeName };
   }
 
+  // ── Chain step launcher + blocking chain runner ─────────────────────────
+
+  function launchChainStep(opts: {
+    name: string;
+    task: string;
+    agentDef?: AgentDef | null;
+    systemPrompt?: string;
+    model?: string;
+    chainProject: string;
+    chainStep: number;
+    chainTotal: number;
+  }, ctx: ExtensionContext): SpawnHandle {
+    const handle = spawnAgentWindow({
+      name: opts.name,
+      task: opts.task,
+      persistent: false,
+      model: opts.model,
+      sessionModel: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
+      agentDef: opts.agentDef ?? undefined,
+      systemPrompt: opts.systemPrompt,
+      extraEnv: {},
+    });
+    const agent: AgentEntry = {
+      id: handle.id, name: opts.name, windowName: handle.windowName,
+      task: `[${opts.chainProject}] ${opts.task}`,
+      mode: "blocking", windowTarget: handle.windowTarget, paneId: handle.paneId,
+      extFile: handle.extFile, stateFile: handle.stateFile, inboxFile: handle.inboxFile,
+      status: "running", startedAt: handle.startedAt, model: handle.modelLabel,
+      chainProject: opts.chainProject,
+      chainStep: opts.chainStep,
+      chainTotal: opts.chainTotal,
+    };
+    agents.set(handle.id, agent);
+    agent.watcher = startWatching(agent);
+    setWidgetForAgent(agent);
+    startTicking();
+    ctx.ui.setWorkingVisible(false);
+    return handle;
+  }
+
+  async function runChain(
+    def: ChainDef,
+    input: string,
+    budget: number,
+    signal: AbortSignal | undefined,
+    onUpdate: ((u: { content: { type: "text"; text: string }[] }) => void) | undefined,
+    ctx: ExtensionContext,
+  ): Promise<{ content: { type: "text"; text: string }[]; details: Record<string, unknown>; isError?: boolean }> {
+    const chainId = `${sanitizeAgentName(def.name)}-${Date.now().toString(36)}`;
+    const fillTemplate = (tpl: string, inp: string, orig: string) =>
+      tpl.replace(/\$(INPUT|ORIGINAL)/g, (_, k) => k === "INPUT" ? inp : orig);
+
+    const original = input;
+    let currentInput = input;
+    let finalOutput = "";
+    let totalCost = 0;
+    const startedAt = Date.now();
+
+    for (let i = 0; i < def.members.length; i++) {
+      const member = def.members[i];
+      if (signal?.aborted) return { content: [{ type: "text", text: "Cancelled." }], details: {}, isError: true };
+
+      const prompt = fillTemplate(member.prompt ?? "$INPUT", currentInput, original);
+      const agentDef = (member.agent && !member.system_prompt) ? loadAgentDef(member.agent) : null;
+      const label = member.agent || `step-${i + 1}`;
+
+      let handle: SpawnHandle;
+      try {
+        handle = launchChainStep({
+          name: label,
+          task: prompt,
+          agentDef,
+          systemPrompt: member.system_prompt,
+          model: member.model,
+          chainProject: chainId,
+          chainStep: i + 1,
+          chainTotal: def.members.length,
+        }, ctx);
+      } catch (err: any) {
+        return { content: [{ type: "text", text: `Chain "${def.name}" failed at step ${i + 1}: ${err?.message ?? err}` }], details: {}, isError: true };
+      }
+
+      // Wait for step completion by polling state file.
+      const stepOutput = await new Promise<{ output: string; isError: boolean }>((resolve) => {
+        const poll = setInterval(() => {
+          if (signal?.aborted) { clearInterval(poll); resolve({ output: "", isError: true }); return; }
+          if (!existsSync(handle.stateFile)) {
+            if (!isPaneAlive(handle.paneId)) { clearInterval(poll); resolve({ output: "(no output)", isError: false }); }
+            return;
+          }
+          try {
+            const st = JSON.parse(readFileSync(handle.stateFile, "utf-8")) as AgentState;
+            const a = agents.get(handle.id);
+            if (st.usage && a) { a.usage = st.usage; setWidgetForAgent(a); }
+            if (st.status === "done" || st.status === "error") {
+              clearInterval(poll);
+              // Clean up the agent entry
+              const entry = agents.get(handle.id);
+              if (entry) { entry.watcher?.close(); agents.delete(handle.id); }
+              try { execSync(`tmux kill-pane -t ${handle.paneId}`, { stdio: "ignore" }); } catch {}
+              try { unlinkSync(handle.stateFile); } catch {}
+              try { unlinkSync(handle.extFile); } catch {}
+              refreshWidget();
+              resolve({ output: st.output ?? "(no output)", isError: st.status === "error" });
+            } else if (!isPaneAlive(handle.paneId)) {
+              clearInterval(poll);
+              const entry = agents.get(handle.id);
+              if (entry) { entry.watcher?.close(); agents.delete(handle.id); }
+              refreshWidget();
+              resolve({ output: "(pane exited)", isError: false });
+            }
+          } catch {}
+        }, 1000);
+      });
+
+      if (stepOutput.isError) {
+        return { content: [{ type: "text", text: `Chain "${def.name}" failed at step ${i + 1} (${label}): ${stepOutput.output}` }], details: {}, isError: true };
+      }
+
+      // Budget check
+      const entry = agents.get(handle.id);
+      totalCost += entry?.usage?.cost ?? 0;
+      if (totalCost >= budget) {
+        const choice = await ctx.ui.select(
+          `Chain "${def.name}" has spent $${totalCost.toFixed(3)} — budget $${budget.toFixed(2)} reached.`,
+          [`Continue (raise to $${(budget * 2).toFixed(2)})`, "Stop here"],
+        );
+        if (!choice?.startsWith("Continue")) {
+          return { content: [{ type: "text", text: `Chain "${def.name}" stopped at budget. Last output:
+
+${stepOutput.output}` }], details: { chain: def.name } };
+        }
+        budget *= 2;
+      }
+
+      currentInput = stepOutput.output;
+      finalOutput  = stepOutput.output;
+      onUpdate?.({ content: [{ type: "text", text: `Chain "${def.name}" step ${i + 1}/${def.members.length} done. $${totalCost.toFixed(3)}/$${budget.toFixed(2)}` }] });
+    }
+
+    return {
+      content: [{ type: "text", text: `Charter (chain) "${def.name}" completed in ${fmtElapsed(Date.now() - startedAt)}.
+
+${finalOutput}` }],
+      details: { chain: def.name, cost: totalCost },
+    };
+  }
+
   // ── run_charter tool ─────────────────────────────────────────────────────
 
   pi.registerTool({
@@ -908,13 +1106,8 @@ export default function (pi: ExtensionAPI) {
       const { chains, teams, errors } = loadCatalog();
       const name = params.charter;
 
-      // Chain: delegate to run_chain by informing user (chains have their own
-      // flow widget and warm-team logic in pi-chain.ts).
       if (chains.has(name)) {
-        return {
-          content: [{ type: "text" as const, text: `"${name}" is a chain — use run_chain("${name}", input) to run it with the full flow widget.` }],
-          details: { kind: "chain", charter: name },
-        };
+        return runChain(chains.get(name)!, params.input, budget, signal, onUpdate, ctx);
       }
 
       const teamDef = teams.get(name);
