@@ -309,7 +309,8 @@ export default function (pi: ExtensionAPI) {
 
   function runStep(step: StepDef, prompt: string, stepRun: StepRun, signal?: AbortSignal): Promise<StepResult> {
     let agentDef: AgentDef | null = null;
-    if (step.agent) {
+    // Only load agent def if agent is set and no inline system_prompt overrides it.
+    if (step.agent && !step.system_prompt) {
       agentDef = loadAgentDef(step.agent);
       if (!agentDef) {
         return Promise.resolve({ output: "", isError: true, reason: `agent definition "${step.agent}" not found` });
@@ -438,7 +439,7 @@ export default function (pi: ExtensionAPI) {
   ): Promise<{ result: StepResult; member: LiveMember | null }> {
     if (!member) {
       let agentDef: AgentDef | null = null;
-      if (step.agent) {
+      if (step.agent && !step.system_prompt) {
         agentDef = loadAgentDef(step.agent);
         if (!agentDef) return Promise.resolve({ result: { output: "", isError: true, reason: `agent definition "${step.agent}" not found` }, member: null });
       }

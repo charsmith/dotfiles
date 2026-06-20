@@ -120,7 +120,7 @@ export function parseCharterBlock(
         const s = rawMembers[i];
         if (s?.system_prompt) {
           members.push({
-            agent: `step-${i + 1}`,
+            agent: "",  // inline-only: no agent.md needed
             system_prompt: s.system_prompt,
             model: s.model,
             prompt: s.prompt ?? "$INPUT",
