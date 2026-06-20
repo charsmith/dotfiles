@@ -102,6 +102,7 @@ interface AgentEntry {
   task: string;
   mode: AgentMode;
   isCoordinator?: boolean;   // designated coordinator of a team
+  teamProject?: string;      // coms-bus project name (set for team members)
   workDir?: string;          // work directory for coordinator agents
   windowTarget: string;
   paneId: string;
@@ -421,8 +422,15 @@ export default function (pi: ExtensionAPI) {
           ].join("\n").trimEnd(),
           display: true,
         }, { deliverAs: "followUp", triggerTurn: true });
-        // Coordinator is done — tear it down immediately rather than waiting
-        // for the pane to die on its own.
+        // Coordinator is done — tear down coordinator + all other tracked
+        // members of the same team project, then clean up the coordinator itself.
+        if (agent.teamProject) {
+          for (const [, member] of agents) {
+            if (member !== agent && member.teamProject === agent.teamProject) {
+              cleanupAgent(member);
+            }
+          }
+        }
         finishAgent(agent, state.output, false);
         return;
       }
@@ -812,6 +820,7 @@ export default function (pi: ExtensionAPI) {
         status: "running", startedAt,
         model: handle.modelLabel,
         isCoordinator: isTeam && params.coordinator === true,
+        teamProject: isTeam ? params.team : undefined,
         workDir: coordinatorWorkDir,
       };
       agents.set(id, agent);

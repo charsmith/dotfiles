@@ -963,7 +963,7 @@ export default function (pi: ExtensionAPI) {
 
   // ── Tool activation: keep coms_* hidden until we're actually on a bus ───────
   // team_down is always active — works without joining the bus.
-  const ALWAYS_ACTIVE_TOOLS = ["team_down"];
+  const ALWAYS_ACTIVE_TOOLS = ["team_down", "team_list"];
   function setComsToolsActive(on: boolean): void {
     try {
       const active = new Set(pi.getActiveTools());
@@ -1110,6 +1110,41 @@ export default function (pi: ExtensionAPI) {
       if (!projects.includes(target)) { ctx.ui.notify(`team-down: no live team "${target}".`, "warning"); return; }
       const { signaled } = teardownProject(target);
       ctx.ui.notify(`team-down "${target}": signaled ${signaled.length} member(s) to exit${signaled.length ? ` (${signaled.join(", ")})` : ""}. Pid-kill backstop in ~4s for any that ignore it.`, "info");
+    },
+  });
+
+  // ── team_list tool ────────────────────────────────────────────────────────
+
+  pi.registerTool({
+    name: "team_list",
+    label: "Team List",
+    description:
+      "List all active coms-bus teams and their members. " +
+      "Works from any session without needing to join the bus.",
+    promptSnippet: "List running agent teams and their members",
+    parameters: Type.Object({}),
+    async execute() {
+      const projects = listProjects();
+      const live = projects.map(p => ({ project: p, members: listLiveAgents(p) })).filter(t => t.members.length > 0);
+      if (live.length === 0) {
+        return { content: [{ type: "text" as const, text: "No active teams." }], details: { teams: [] } };
+      }
+      const lines = live.map(t => {
+        const members = t.members.map(m => `  ◦ ${m.name}${m.purpose ? `  — ${m.purpose}` : ""}`).join("\n");
+        return `${t.project}  (${t.members.length} member${t.members.length > 1 ? "s" : ""})\n${members}`;
+      });
+      return {
+        content: [{ type: "text" as const, text: lines.join("\n\n") }],
+        details: { teams: live.map(t => ({ project: t.project, members: t.members.map(m => m.name) })) },
+      };
+    },
+    renderCall(_args, theme) {
+      return new Text(theme.fg("toolTitle", theme.bold("team_list")), 0, 0);
+    },
+    renderResult(result, _opts, theme) {
+      const d = result.details as any;
+      const count = d?.teams?.length ?? 0;
+      return new Text(theme.fg(count ? "accent" : "dim", count ? `${count} team${count > 1 ? "s" : ""}` : "no active teams"), 0, 0);
     },
   });
 
