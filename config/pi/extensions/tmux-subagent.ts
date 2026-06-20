@@ -841,6 +841,7 @@ export default function (pi: ExtensionAPI) {
       writeFileSync(path.join(workDir, "input.md"), params.input, "utf-8");
 
       const spawnErr: string[] = [];
+      const warnings: string[] = [];
       const workers = teamDef.members.filter(m => m.agent !== coordName);
       const coordMember = teamDef.members.find(m => m.agent === coordName) ?? teamDef.members[0];
 
@@ -848,6 +849,7 @@ export default function (pi: ExtensionAPI) {
       for (const member of [...workers, coordMember]) {
         const isCoord = member.agent === coordName;
         const agentDef = loadAgentDef(member.agent);
+        if (!agentDef) warnings.push(`"${member.agent}" has no agent.md — launching without persona`);
         try {
           launchTeamMember({
             name: member.agent,
@@ -881,12 +883,16 @@ export default function (pi: ExtensionAPI) {
       }
 
       const memberList = teamDef.members
-        .map(m => m.agent + (m.agent === coordName ? " [coordinator]" : "")).join(", ");
+        .map(m => {
+          const hasdef = !!loadAgentDef(m.agent);
+          return m.agent + (m.agent === coordName ? " [coordinator]" : "") + (hasdef ? "" : " [⚠ no agent.md]");
+        }).join(", ");
+      const warnLine = warnings.length ? `\nWarnings: ${warnings.join("; ")}` : "";
       return {
         content: [{ type: "text" as const, text:
           `Team "${name}" launched — ${teamDef.members.length} members: ${memberList}.\n` +
           `Work dir: ${workDir}\n` +
-          `The coordinator will deliver a follow-up when done (budget: $${budget.toFixed(2)}).`
+          `The coordinator will deliver a follow-up when done (budget: $${budget.toFixed(2)}).${warnLine}`
         }],
         details: { charter: name, workDir, project, budget },
       };
