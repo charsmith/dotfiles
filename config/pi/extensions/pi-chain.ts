@@ -78,6 +78,7 @@ import {
   sanitizeAgentName,
   type SpawnHandle,
   spawnAgentWindow,
+  trackSpawnedAgent,
   TmuxSpawnError,
   windowForPane,
 } from "./lib/agent-spawn.ts";
@@ -838,29 +839,35 @@ export default function (pi: ExtensionAPI) {
 
   // ── run_charter tool ─────────────────────────────────────────────────────────
 
-  async function runTeam(
+  // runTeam: spawn all charter members via trackSpawnedAgent so they get
+  // widget cards, coordinator detection, auto-teardown — all from
+  // tmux-subagent.ts. Returns immediately (non-blocking); coordinator
+  // follow-up arrives when output.md is written (see pollAgentState).
+  function runTeam(
     def: TeamDef,
     input: string,
     budget: number,
-    signal: AbortSignal | undefined,
-    onUpdate: ((u: { content: { type: "text"; text: string }[] }) => void) | undefined,
-    ctx: ExtensionContext,
-  ): Promise<{ content: { type: "text"; text: string }[]; details: Record<string, unknown>; isError?: boolean }> {
-    const workDir = path.join(agentTeamsWorkdir(), def.name, makeUnitOfWorkId(input));
+  ): { content: { type: "text"; text: string }[]; details: Record<string, unknown>; isError?: boolean } {
+    const workDir  = path.join(agentTeamsWorkdir(), def.name, makeUnitOfWorkId(input));
     mkdirSync(workDir, { recursive: true });
     writeFileSync(path.join(workDir, "input.md"), input, "utf-8");
-    const coordName = def.entry_point ?? def.members.find(m => m.role === "coordinator")?.agent ?? def.members[0].agent;
+
+    const coordName = def.entry_point ??
+      def.members.find(m => m.role === "coordinator")?.agent ??
+      def.members[0].agent;
     const project = `${sanitizeAgentName(def.name)}-${Date.now().toString(36)}`;
-    type TH = { handle: SpawnHandle; name: string; isCoord: boolean };
-    const handles: TH[] = [];
-    let coordInboxFile = "";
-    const spawnErr: string[] = [];
+
     const workers = def.members.filter(m => m.agent !== coordName);
     const coordMember = def.members.find(m => m.agent === coordName) ?? def.members[0];
+    const spawnErr: string[] = [];
+
     for (const member of [...workers, coordMember]) {
       const isCoord = member.agent === coordName;
       const agentDef = loadAgentDef(member.agent);
-      const extraEnv: Record<string, string> = { PI_COMS_PROJECT: project, PI_COMS_CNAME: sanitizeAgentName(member.agent) };
+      const extraEnv: Record<string, string> = {
+        PI_COMS_PROJECT: project,
+        PI_COMS_CNAME: sanitizeAgentName(member.agent),
+      };
       if (member.description) extraEnv.PI_COMS_PURPOSE = member.description;
       if (isCoord) { extraEnv.PI_COORDINATOR = "1"; extraEnv.PI_WORK_DIR = workDir; }
       try {
@@ -873,86 +880,34 @@ export default function (pi: ExtensionAPI) {
           persistent: true, agentDef: agentDef ?? undefined, extraEnv,
           coordinatorWorkDir: isCoord ? workDir : undefined,
         });
-        handles.push({ handle, name: member.agent, isCoord });
-        if (isCoord) coordInboxFile = handle.inboxFile;
+        trackSpawnedAgent(handle, {
+          name: member.agent,
+          task: isCoord ? input : `[${def.name}] ${member.role || "specialist"}`,
+          mode: "team",
+          isCoordinator: isCoord,
+          teamProject: project,
+          workDir: isCoord ? workDir : undefined,
+          budget: isCoord ? budget : undefined,
+        });
       } catch (err: any) { spawnErr.push(`Spawn "${member.agent}": ${err?.message ?? err}`); }
     }
+
     if (spawnErr.length) {
-      for (const { handle } of handles) {
-        try { execSync(`tmux kill-pane -t ${handle.paneId}`, { stdio: "ignore" }); } catch {}
-        try { unlinkSync(handle.stateFile); } catch {}
-        try { unlinkSync(handle.extFile); } catch {}
-      }
       return { content: [{ type: "text", text: `Team spawn failed:\n${spawnErr.join("\n")}` }], details: {}, isError: true };
     }
-    const teardown = () => {
-      for (const { handle } of handles) {
-        try { execSync(`tmux kill-pane -t ${handle.paneId}`, { stdio: "ignore" }); } catch {}
-        try { unlinkSync(handle.stateFile); } catch {}
-        try { unlinkSync(handle.extFile); } catch {}
-        try { unlinkSync(handle.inboxFile); } catch {}
-      }
+
+    const memberList = def.members.map(m => m.agent + (m.agent === coordName ? " [coordinator]" : "")).join(", ");
+    return {
+      content: [{ type: "text", text:
+        `Team "${def.name}" launched — ${def.members.length} members: ${memberList}.\n` +
+        `Work dir: ${workDir}\n` +
+        `The coordinator will deliver a follow-up when done (budget: $${budget.toFixed(2)}).`
+      }],
+      details: { charter: def.name, workDir, project, budget },
     };
-    const readSt = (h: SpawnHandle): AgentState | null => {
-      try { return JSON.parse(readFileSync(h.stateFile, "utf-8")) as AgentState; } catch { return null; }
-    };
-    const waitForReport = async (ms: number): Promise<string> => {
-      const dl = Date.now() + ms;
-      while (Date.now() < dl) {
-        try { const r = readFileSync(path.join(workDir, "output.md"), "utf-8").trim(); if (r) return r; } catch {}
-        await new Promise(r => setTimeout(r, 1000));
-      }
-      try { return readFileSync(path.join(workDir, "output.md"), "utf-8").trim(); } catch { return ""; }
-    };
-    let totalCost = 0;
-    let resultText = "";
-    outer: while (true) {
-      if (signal?.aborted) { teardown(); return { content: [{ type: "text", text: "Cancelled." }], details: { charter: def.name }, isError: true }; }
-      await new Promise(r => setTimeout(r, 1000));
-      let cost = 0; let coordState: AgentState | null = null;
-      for (const { handle, isCoord } of handles) {
-        const st = readSt(handle); cost += st?.usage?.cost ?? 0;
-        if (isCoord) coordState = st;
-      }
-      totalCost = cost;
-      if (coordState?.status === "completed") {
-        const rp = path.join(workDir, "output.md");
-        let report = ""; try { report = readFileSync(rp, "utf-8").trim(); } catch {}
-        resultText = [`Charter "${def.name}" completed.  Total: $${cost.toFixed(3)}`, `Report: ${rp}`, "", report || "(no report)"].join("\n");
-        break outer;
-      }
-      if (cost >= budget) {
-        const choice = await ctx.ui.select(
-          `Charter "${def.name}" has spent $${cost.toFixed(3)} — budget $${budget.toFixed(2)} reached.`,
-          [`Continue (raise to $${(budget * 2).toFixed(2)})`, "Stop — ask for partial report"],
-        );
-        if (choice?.startsWith("Continue")) { budget *= 2; }
-        else {
-          if (coordInboxFile) {
-            try { writeFileSync(coordInboxFile,
-              `Budget limit reached ($${cost.toFixed(3)} spent). Write a partial report to output.md summarising what has been accomplished so far, then stop.`,
-              "utf-8"); } catch {}
-          }
-          const partial = await waitForReport(30_000);
-          const rp = path.join(workDir, "output.md");
-          resultText = [`Charter "${def.name}" stopped at budget.  Spent: $${cost.toFixed(3)}`, `Partial report: ${rp}`, "", partial || "(no partial report written in time)"].join("\n");
-          break outer;
-        }
-      }
-      onUpdate?.({ content: [{ type: "text", text:
-        `Running "${def.name}"  ` +
-        handles.map(({ handle, name: n }) => {
-          const st = readSt(handle);
-          const icon = st?.status === "running" ? "●" : st?.status === "idle" ? "◦" : st?.status === "completed" ? "✓" : "○";
-          return `${icon} ${n}`;
-        }).join("  ") + `  $${cost.toFixed(3)}/$${budget.toFixed(2)}`
-      }] });
-    }
-    teardown();
-    return { content: [{ type: "text", text: resultText }], details: { charter: def.name, workDir, cost: totalCost } };
   }
 
-  pi.registerTool({
+    pi.registerTool({
     name: "run_charter",
     label: "Run Charter",
     description:
@@ -1017,7 +972,7 @@ export default function (pi: ExtensionAPI) {
         return { content: [{ type: "text", text: `Charter (chain) "${name}" completed.\n\n${finalOutput}` }], details: { chain: name, cost: totalCost } };
       }
       const teamDef = teams.get(name);
-      if (teamDef) return runTeam(teamDef, params.input, spendBudget, signal, onUpdate, ctx);
+      if (teamDef) return runTeam(teamDef, params.input, spendBudget);
       const avail = [...chains.keys(), ...teams.keys()].join(", ") || "(none)";
       return { content: [{ type: "text", text: `Charter "${name}" not found. Available: ${avail}${errors.length ? `\nErrors: ${errors.join("; ")}` : ""}` }], details: {}, isError: true };
     },

@@ -216,6 +216,34 @@ export function sanitizeAgentName(name: string): string {
   );
 }
 
+// ─── Cross-extension agent tracker registry ──────────────────────────────────
+//
+// tmux-subagent.ts registers a tracking function once at startup.
+// pi-chain.ts (and any future orchestrator) calls trackSpawnedAgent()
+// after spawning so the agent gets widget cards, coordinator detection,
+// auto-teardown — all the tmux-subagent machinery — without duplicating it.
+
+export interface TrackAgentOpts {
+  name: string;
+  task: string;
+  mode: "team" | "background";
+  isCoordinator?: boolean;
+  teamProject?: string;
+  workDir?: string;
+  budget?: number;          // spending cap in USD (coordinator agents only)
+}
+
+type TrackFn = (handle: SpawnHandle, opts: TrackAgentOpts) => void;
+let _trackFn: TrackFn | null = null;
+
+/** Called once by tmux-subagent.ts at session_start to register itself. */
+export function registerAgentTracker(fn: TrackFn): void { _trackFn = fn; }
+
+/** Called by orchestrators (run_charter etc.) after spawnAgentWindow(). */
+export function trackSpawnedAgent(handle: SpawnHandle, opts: TrackAgentOpts): void {
+  _trackFn?.(handle, opts);
+}
+
 // ─── Agent-teams config helpers (shared by tmux-subagent + pi-chain) ────────────
 
 export function agentTeamsWorkdir(): string {

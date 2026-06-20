@@ -81,10 +81,14 @@ import {
   isPaneAlive,
   loadAgentDef,
   makeUnitOfWorkId,
+  registerAgentTracker,
   sanitizeAgentName,
   sendKeysToPane,
   shortModelName,
+  type SpawnHandle,
   spawnAgentWindow,
+  type TrackAgentOpts,
+  trackSpawnedAgent,
   TmuxSpawnError,
   windowForPane,
 } from "./lib/agent-spawn.ts";
@@ -106,6 +110,7 @@ interface AgentEntry {
   isCoordinator?: boolean;   // designated coordinator of a team
   teamProject?: string;      // coms-bus project name (set for team members)
   workDir?: string;          // work directory for coordinator agents
+  budget?: number;           // spending cap in USD (coordinator agents only)
   windowTarget: string;
   paneId: string;
   extFile: string;
@@ -372,6 +377,29 @@ export default function (pi: ExtensionAPI) {
           void onAgentStopped(agent);
         }
         return;
+      }
+
+      // Budget check for coordinator agents — sum costs across all team members.
+      if (agent.isCoordinator && agent.budget && agent.teamProject) {
+        let teamCost = 0;
+        for (const [, a] of agents) {
+          if (a.teamProject === agent.teamProject) teamCost += a.usage?.cost ?? 0;
+        }
+        // Also include current state's usage
+        if (state.usage) teamCost = Math.max(teamCost, state.usage.cost);
+        if (teamCost >= agent.budget) {
+          // Ask via follow-up (non-blocking — we're in the tick loop)
+          const budget = agent.budget;
+          agent.budget = undefined; // prevent re-firing
+          pi.sendMessage({
+            customType: "charter-budget",
+            content: `Charter budget $${budget.toFixed(2)} reached (spent: $${teamCost.toFixed(3)}). ` +
+              `Reply "continue" to raise the budget by $${budget.toFixed(2)}, or "stop" to ask the coordinator for a partial report.`,
+            display: true,
+          }, { deliverAs: "followUp", triggerTurn: true });
+          // Store raised budget back so user can continue by setting it
+          // The user's reply will come as a new turn — coordinator keeps running
+        }
       }
 
       // Coordinator finished the unit of work — output.md was written.
@@ -694,6 +722,28 @@ export default function (pi: ExtensionAPI) {
   function stopTicking() {
     if (tickInterval) { clearInterval(tickInterval); tickInterval = null; tickCount = 0; }
   }
+
+  // ── Cross-extension agent tracker ────────────────────────────────────────
+  // Registers this extension so orchestrators (run_charter in pi-chain.ts)
+  // can spawn agents that get full widget cards + coordinator machinery.
+
+  function registerTrackedAgent(handle: SpawnHandle, opts: TrackAgentOpts): void {
+    const agent: AgentEntry = {
+      id: handle.id, name: opts.name, windowName: handle.windowName,
+      task: opts.teamProject ? `[team:${opts.teamProject}] ${opts.task}` : opts.task,
+      mode: opts.mode, windowTarget: handle.windowTarget, paneId: handle.paneId,
+      extFile: handle.extFile, stateFile: handle.stateFile, inboxFile: handle.inboxFile,
+      status: "running", startedAt: handle.startedAt, model: handle.modelLabel,
+      isCoordinator: opts.isCoordinator, teamProject: opts.teamProject,
+      workDir: opts.workDir, budget: opts.budget,
+    };
+    agents.set(handle.id, agent);
+    agent.watcher = startWatching(agent);
+    setWidgetForAgent(agent);
+    startTicking();
+    latestCtx?.ui.setWorkingVisible(false);
+  }
+  registerAgentTracker(registerTrackedAgent);
 
   // ── launch_agent tool ────────────────────────────────────────────────────
 
