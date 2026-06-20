@@ -308,21 +308,109 @@ export default function (pi: ExtensionAPI) {
           if (!widgetDirty && width === cachedWidth) return cachedLines;
           widgetDirty = false;
           cachedWidth = width;
-          const MAX_WIDTH = 58;
-          const inner     = Math.max(0, Math.min(width, MAX_WIDTH) - 2);
-          // Sort by launch time so the order never changes as widgets update.
+
+          // Card dimensions: target 3 per row, min width 44.
+          const CARD_W   = Math.max(44, Math.floor((width - 2) / 3));
+          const CARD_GAP = 1;
+          const cardsPerRow = Math.max(1, Math.floor((width + CARD_GAP) / (CARD_W + CARD_GAP)));
+          const inner = CARD_W - 2;
+
+          // Pad a single card line to exactly CARD_W visible chars.
+          const padLine = (line: string): string =>
+            line + " ".repeat(Math.max(0, CARD_W - visibleWidth(line)));
+
+          // Combine N card-line arrays horizontally with a gap.
+          const hstack = (cardLines: string[][]): string[] => {
+            const h = cardLines[0]?.length ?? 0;
+            const result: string[] = [];
+            for (let r = 0; r < h; r++) {
+              result.push(cardLines.map((cl, ci) =>
+                padLine(cl[r] ?? " ".repeat(CARD_W)) + (ci < cardLines.length - 1 ? " ".repeat(CARD_GAP) : "")
+              ).join(""));
+            }
+            return result;
+          };
+
+          // Team banner spanning full width.
+          const renderTeamBanner = (project: string, members: AgentEntry[]): string[] => {
+            // Strip the timestamp suffix to get the human name.
+            const teamName = project.replace(/-[a-z0-9]{8}$/, "");
+            const coordinator = members.find(a => a.isCoordinator);
+            const budget  = coordinator?.budget;
+            const spent   = members.reduce((s, a) => s + (a.usage?.cost ?? 0), 0);
+            const elapsed = fmtElapsed(Date.now() - Math.min(...members.map(a => a.startedAt)));
+            const memberIcons = members.map(a => {
+              const ds = displayStatus(a);
+              const icon = ds === "running" || ds === "working" ? "●" : ds === "idle" ? "◦" : ds === "completed" ? "✓" : "○";
+              return `${icon}\u202f${a.name}`;
+            }).join("  ");
+
+            let right = elapsed;
+            if (budget) {
+              const pct  = Math.min(100, Math.round(spent / budget * 100));
+              const BAR  = 12;
+              const fill = Math.round(BAR * pct / 100);
+              const bar  = "█".repeat(fill) + "░".repeat(BAR - fill);
+              right = `$${spent.toFixed(2)}/$${budget.toFixed(2)}  ${bar} ${pct}%  ${elapsed}`;
+            }
+
+            const inner2 = width - 4;
+            const left   = truncateToWidth(`${teamName}  ${memberIcons}`, inner2 - right.length - 2);
+            const gap    = " ".repeat(Math.max(1, inner2 - visibleWidth(left) - visibleWidth(right)));
+            const body   = " " + theme.fg("accent", left) + gap + theme.fg("dim", right) + " ";
+
+            return [
+              theme.fg("accent", "╔" + "═".repeat(width - 2) + "╗"),
+              theme.fg("accent", "║") + body + theme.fg("accent", "║"),
+              theme.fg("accent", "╚" + "═".repeat(width - 2) + "╝"),
+            ];
+          };
+
           const sorted = Array.from(agents.values()).sort((a, b) => a.startedAt - b.startedAt);
-          const lines: string[] = [];
+
+          // Group by team project (preserving insertion order).
+          const teamMap = new Map<string, AgentEntry[]>();
+          const standalone: AgentEntry[] = [];
           for (const agent of sorted) {
-            if (lines.length > 0) lines.push("");  // gap between cards
-            lines.push(...renderCard(agent, inner, theme));
+            if (agent.teamProject) {
+              const g = teamMap.get(agent.teamProject) ?? [];
+              g.push(agent);
+              teamMap.set(agent.teamProject, g);
+            } else {
+              standalone.push(agent);
+            }
           }
+
+          const tileCards = (group: AgentEntry[]): string[] => {
+            const result: string[] = [];
+            for (let i = 0; i < group.length; i += cardsPerRow) {
+              const row = group.slice(i, i + cardsPerRow);
+              const cardLines = row.map(a => renderCard(a, inner, theme));
+              if (result.length > 0) result.push("");
+              result.push(...hstack(cardLines));
+            }
+            return result;
+          };
+
+          const lines: string[] = [];
+
+          // Teams: banner + tiled member cards.
+          for (const [project, members] of teamMap) {
+            if (lines.length > 0) lines.push("");
+            lines.push(...renderTeamBanner(project, members));
+            lines.push(...tileCards(members));
+          }
+
+          // Standalone agents: tiled rows.
+          if (standalone.length > 0) {
+            if (lines.length > 0) lines.push("");
+            lines.push(...tileCards(standalone));
+          }
+
           cachedLines = lines;
           return lines;
         },
         invalidate() {
-          // Called by the TUI on theme changes — clear the cache so the next
-          // render() recomputes with the fresh theme colours.
           cachedLines = [];
           cachedWidth = -1;
         },
