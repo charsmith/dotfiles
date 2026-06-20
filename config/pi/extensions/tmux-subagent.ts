@@ -149,7 +149,9 @@ function makeUnitOfWorkId(task: string): string {
   const pad = (n: number, w = 2) => String(n).padStart(w, "0");
   const ts  = `${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}-` +
               `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-  const slug = task.toLowerCase()
+  // Use first non-empty line only — keeps the slug short and readable
+  const firstLine = task.split("\n").map(l => l.trim()).find(l => l.length > 0) ?? task;
+  const slug = firstLine.toLowerCase()
     .replace(/[^a-z0-9\s-]/g, "")
     .trim()
     .replace(/\s+/g, "-")
@@ -422,8 +424,53 @@ export default function (pi: ExtensionAPI) {
           ].join("\n").trimEnd(),
           display: true,
         }, { deliverAs: "followUp", triggerTurn: true });
-        // Coordinator is done — tear down coordinator + all other tracked
-        // members of the same team project, then clean up the coordinator itself.
+        // Collect usage across all team members before teardown, then write info.md.
+        if (agent.workDir) {
+          try {
+            const rows: { name: string; usage: AgentUsage | undefined }[] = [
+              { name: agent.name, usage: state.usage ?? agent.usage },
+            ];
+            if (agent.teamProject) {
+              for (const [, member] of agents) {
+                if (member !== agent && member.teamProject === agent.teamProject) {
+                  rows.push({ name: member.name, usage: member.usage });
+                }
+              }
+            }
+            const totals = rows.reduce(
+              (acc, r) => ({
+                turns:  acc.turns  + (r.usage?.turns  ?? 0),
+                input:  acc.input  + (r.usage?.input  ?? 0),
+                output: acc.output + (r.usage?.output ?? 0),
+                cost:   acc.cost   + (r.usage?.cost   ?? 0),
+              }),
+              { turns: 0, input: 0, output: 0, cost: 0 },
+            );
+            const tableRows = rows.map(r => {
+              const u = r.usage;
+              return `| ${r.name} | ${u?.turns ?? 0} | ${fmtTokens(u?.input ?? 0)} | ${fmtTokens(u?.output ?? 0)} | $${(u?.cost ?? 0).toFixed(3)} |`;
+            }).join("\n");
+            const elapsed = fmtElapsed(Date.now() - agent.startedAt);
+            const info = [
+              `# Team Run Info`,
+              ``,
+              `**Team:** ${agent.teamProject ?? "(ad-hoc)"}`,
+              `**Unit of work:** ${path.basename(agent.workDir)}`,
+              `**Completed:** ${new Date().toISOString()}`,
+              `**Wall time:** ${elapsed}`,
+              ``,
+              `## Cost`,
+              ``,
+              `| Agent | Turns | Input | Output | Cost |`,
+              `|-------|-------|-------|--------|------|`,
+              tableRows,
+              `| **Total** | **${totals.turns}** | **${fmtTokens(totals.input)}** | **${fmtTokens(totals.output)}** | **$${totals.cost.toFixed(3)}** |`,
+            ].join("\n");
+            writeFileSync(path.join(agent.workDir, "info.md"), info, "utf-8");
+          } catch { /* ignore — don't let info.md failure block teardown */ }
+        }
+
+        // Tear down all other tracked team members, then the coordinator.
         if (agent.teamProject) {
           for (const [, member] of agents) {
             if (member !== agent && member.teamProject === agent.teamProject) {
