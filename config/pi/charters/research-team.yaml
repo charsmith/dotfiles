@@ -1,0 +1,15 @@
+kind: team
+description: "A research lead coordinates an analyst to research any topic and produce a structured report"
+topology: hub-spoke
+entry_point: research-lead
+guardrail: auto
+
+members:
+  - agent: research-lead
+    role: coordinator
+    description: "Delegates research tasks and synthesizes findings into output.md"
+
+  - agent: analyst
+    role: specialist
+    description: "Researches assigned topics and reports findings back to the lead"
+    reports_to: research-lead

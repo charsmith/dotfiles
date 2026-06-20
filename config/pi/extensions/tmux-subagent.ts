@@ -70,6 +70,7 @@ import { Type } from "typebox";
 // Shared spawn/IPC primitive — the "one link" both this extension and
 // pi-chain.ts build on. See lib/agent-spawn.ts.
 import {
+  agentTeamsWorkdir,
   type AgentDef,
   type AgentPrompt,
   type AgentState,
@@ -79,6 +80,7 @@ import {
   fmtUsage,
   isPaneAlive,
   loadAgentDef,
+  makeUnitOfWorkId,
   sanitizeAgentName,
   sendKeysToPane,
   shortModelName,
@@ -131,34 +133,7 @@ interface ToolResultLike {
 
 // ─── Extension ─────────────────────────────────────────────────────────────
 
-// ─── Agent-teams config + coordinator helpers ────────────────────────────────
-
-function agentTeamsWorkdir(): string {
-  const cfgPath = path.join(os.homedir(), ".config", "pi", "agent-teams.json");
-  try {
-    const raw = JSON.parse(readFileSync(cfgPath, "utf-8"));
-    const wd  = typeof raw.workdir === "string" ? raw.workdir : "~/code/agent-teams";
-    return wd.replace(/^~/, os.homedir());
-  } catch {
-    return path.join(os.homedir(), "code", "agent-teams");
-  }
-}
-
-function makeUnitOfWorkId(task: string): string {
-  const now = new Date();
-  const pad = (n: number, w = 2) => String(n).padStart(w, "0");
-  const ts  = `${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}-` +
-              `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-  // Use first non-empty line only — keeps the slug short and readable
-  const firstLine = task.split("\n").map(l => l.trim()).find(l => l.length > 0) ?? task;
-  const slug = firstLine.toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, "")
-    .trim()
-    .replace(/\s+/g, "-")
-    .slice(0, 40)
-    .replace(/-+$/, "");
-  return slug ? `${ts}-${slug}` : ts;
-}
+// agentTeamsWorkdir + makeUnitOfWorkId imported from lib/agent-spawn.ts
 
 export default function (pi: ExtensionAPI) {
   // When running as a subagent, this extension is still loaded from the global

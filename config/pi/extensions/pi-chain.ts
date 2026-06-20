@@ -56,7 +56,7 @@
  */
 
 import { execSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, unlinkSync, watch, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, watch, writeFileSync } from "node:fs";
 import type { FSWatcher } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -65,13 +65,17 @@ import { Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 import {
+  agentTeamsWorkdir,
   type AgentDef,
   type AgentState,
   type AgentUsage,
   fmtElapsed,
+  fmtTokens,
   fmtUsage,
   isPaneAlive,
   loadAgentDef,
+  makeUnitOfWorkId,
+  sanitizeAgentName,
   type SpawnHandle,
   spawnAgentWindow,
   TmuxSpawnError,
@@ -829,6 +833,207 @@ export default function (pi: ExtensionAPI) {
       const body = txt?.type === "text" ? txt.text : "(done)";
       const icon = result.isError ? theme.fg("error", "✗ ") : theme.fg("success", "✓ ");
       return new Text(icon + theme.fg("muted", body), 0, 0);
+    },
+  });
+
+  // ── run_charter tool ─────────────────────────────────────────────────────────
+
+  async function runTeam(
+    def: TeamDef,
+    input: string,
+    budget: number,
+    signal: AbortSignal | undefined,
+    onUpdate: ((u: { content: { type: "text"; text: string }[] }) => void) | undefined,
+    ctx: ExtensionContext,
+  ): Promise<{ content: { type: "text"; text: string }[]; details: Record<string, unknown>; isError?: boolean }> {
+    const workDir = path.join(agentTeamsWorkdir(), def.name, makeUnitOfWorkId(input));
+    mkdirSync(workDir, { recursive: true });
+    writeFileSync(path.join(workDir, "input.md"), input, "utf-8");
+    const coordName = def.entry_point ?? def.members.find(m => m.role === "coordinator")?.agent ?? def.members[0].agent;
+    const project = `${sanitizeAgentName(def.name)}-${Date.now().toString(36)}`;
+    type TH = { handle: SpawnHandle; name: string; isCoord: boolean };
+    const handles: TH[] = [];
+    let coordInboxFile = "";
+    const spawnErr: string[] = [];
+    const workers = def.members.filter(m => m.agent !== coordName);
+    const coordMember = def.members.find(m => m.agent === coordName) ?? def.members[0];
+    for (const member of [...workers, coordMember]) {
+      const isCoord = member.agent === coordName;
+      const agentDef = loadAgentDef(member.agent);
+      const extraEnv: Record<string, string> = { PI_COMS_PROJECT: project, PI_COMS_CNAME: sanitizeAgentName(member.agent) };
+      if (member.description) extraEnv.PI_COMS_PURPOSE = member.description;
+      if (isCoord) { extraEnv.PI_COORDINATOR = "1"; extraEnv.PI_WORK_DIR = workDir; }
+      try {
+        const handle = spawnAgentWindow({
+          name: member.agent,
+          task: isCoord ? input :
+            `You are a ${member.role || "specialist"} on team "${def.name}". ` +
+            `Wait for instructions on coms bus project "${project}". ` +
+            (member.description ? `Your role: ${member.description}` : ""),
+          persistent: true, agentDef: agentDef ?? undefined, extraEnv,
+          coordinatorWorkDir: isCoord ? workDir : undefined,
+        });
+        handles.push({ handle, name: member.agent, isCoord });
+        if (isCoord) coordInboxFile = handle.inboxFile;
+      } catch (err: any) { spawnErr.push(`Spawn "${member.agent}": ${err?.message ?? err}`); }
+    }
+    if (spawnErr.length) {
+      for (const { handle } of handles) {
+        try { execSync(`tmux kill-pane -t ${handle.paneId}`, { stdio: "ignore" }); } catch {}
+        try { unlinkSync(handle.stateFile); } catch {}
+        try { unlinkSync(handle.extFile); } catch {}
+      }
+      return { content: [{ type: "text", text: `Team spawn failed:\n${spawnErr.join("\n")}` }], details: {}, isError: true };
+    }
+    const teardown = () => {
+      for (const { handle } of handles) {
+        try { execSync(`tmux kill-pane -t ${handle.paneId}`, { stdio: "ignore" }); } catch {}
+        try { unlinkSync(handle.stateFile); } catch {}
+        try { unlinkSync(handle.extFile); } catch {}
+        try { unlinkSync(handle.inboxFile); } catch {}
+      }
+    };
+    const readSt = (h: SpawnHandle): AgentState | null => {
+      try { return JSON.parse(readFileSync(h.stateFile, "utf-8")) as AgentState; } catch { return null; }
+    };
+    const waitForReport = async (ms: number): Promise<string> => {
+      const dl = Date.now() + ms;
+      while (Date.now() < dl) {
+        try { const r = readFileSync(path.join(workDir, "output.md"), "utf-8").trim(); if (r) return r; } catch {}
+        await new Promise(r => setTimeout(r, 1000));
+      }
+      try { return readFileSync(path.join(workDir, "output.md"), "utf-8").trim(); } catch { return ""; }
+    };
+    let totalCost = 0;
+    let resultText = "";
+    outer: while (true) {
+      if (signal?.aborted) { teardown(); return { content: [{ type: "text", text: "Cancelled." }], details: { charter: def.name }, isError: true }; }
+      await new Promise(r => setTimeout(r, 1000));
+      let cost = 0; let coordState: AgentState | null = null;
+      for (const { handle, isCoord } of handles) {
+        const st = readSt(handle); cost += st?.usage?.cost ?? 0;
+        if (isCoord) coordState = st;
+      }
+      totalCost = cost;
+      if (coordState?.status === "completed") {
+        const rp = path.join(workDir, "output.md");
+        let report = ""; try { report = readFileSync(rp, "utf-8").trim(); } catch {}
+        resultText = [`Charter "${def.name}" completed.  Total: $${cost.toFixed(3)}`, `Report: ${rp}`, "", report || "(no report)"].join("\n");
+        break outer;
+      }
+      if (cost >= budget) {
+        const choice = await ctx.ui.select(
+          `Charter "${def.name}" has spent $${cost.toFixed(3)} — budget $${budget.toFixed(2)} reached.`,
+          [`Continue (raise to $${(budget * 2).toFixed(2)})`, "Stop — ask for partial report"],
+        );
+        if (choice?.startsWith("Continue")) { budget *= 2; }
+        else {
+          if (coordInboxFile) {
+            try { writeFileSync(coordInboxFile,
+              `Budget limit reached ($${cost.toFixed(3)} spent). Write a partial report to output.md summarising what has been accomplished so far, then stop.`,
+              "utf-8"); } catch {}
+          }
+          const partial = await waitForReport(30_000);
+          const rp = path.join(workDir, "output.md");
+          resultText = [`Charter "${def.name}" stopped at budget.  Spent: $${cost.toFixed(3)}`, `Partial report: ${rp}`, "", partial || "(no partial report written in time)"].join("\n");
+          break outer;
+        }
+      }
+      onUpdate?.({ content: [{ type: "text", text:
+        `Running "${def.name}"  ` +
+        handles.map(({ handle, name: n }) => {
+          const st = readSt(handle);
+          const icon = st?.status === "running" ? "●" : st?.status === "idle" ? "◦" : st?.status === "completed" ? "✓" : "○";
+          return `${icon} ${n}`;
+        }).join("  ") + `  $${cost.toFixed(3)}/$${budget.toFixed(2)}`
+      }] });
+    }
+    teardown();
+    return { content: [{ type: "text", text: resultText }], details: { charter: def.name, workDir, cost: totalCost } };
+  }
+
+  pi.registerTool({
+    name: "run_charter",
+    label: "Run Charter",
+    description:
+      "Run a declared charter (team or chain) against a task. " +
+      "Chains run as sequential pipelines; teams launch hub-spoke coordination. " +
+      "A budget cap (USD, default $20) pauses and asks to continue or stop with a partial report. " +
+      "Charters live in ~/.config/pi/charters/. Use catalog_list() to see what's available.",
+    promptSnippet: "Run a declared agent charter (team or chain) against a task",
+    parameters: Type.Object({
+      charter: Type.String({ description: "Charter name (from ~/.config/pi/charters/)." }),
+      input:   Type.String({ description: "The task or question to work on." }),
+      budget:  Type.Optional(Type.Number({ description: "Spending cap in USD (default $20.00). Pauses if reached." })),
+    }),
+    async execute(_id, params, signal, onUpdate, ctx) {
+      latestCtx = ctx;
+      if (process.env.PI_SUBAGENT && !process.env.PI_AGENT_SPAWN) {
+        return { content: [{ type: "text", text: "Error: subagents cannot run charters." }], details: {}, isError: true };
+      }
+      const spendBudget = typeof params.budget === "number" ? params.budget : 20.00;
+      const { chains, teams, errors } = loadCatalog();
+      const name = params.charter;
+      const chain = chains.get(name);
+      if (chain) {
+        if (liveTeam && liveTeam.chainName !== name) teardownLiveTeam();
+        if (!liveTeam) liveTeam = { chainName: name, members: chain.steps.map(() => null) };
+        const team = liveTeam;
+        cancelDismiss();
+        run = { name, steps: chain.steps.map((s, i) => ({ label: s.agent || `step ${i+1}`, status: "pending" as StepStatus })), current: 0, startedAt: Date.now(), status: "running", persist: !!chain.persist };
+        refreshWidget(); startTick();
+        const original = params.input; let input = params.input; let finalOutput = ""; let totalCost = 0;
+        try {
+          for (let i = 0; i < chain.steps.length; i++) {
+            run.current = i;
+            const step = chain.steps[i]; const stepRun = run.steps[i];
+            const prompt = fillTemplate(step.prompt, input, original);
+            const clearCtx = step.clearContext ?? chain.clearContext;
+            let res: StepResult;
+            if (clearCtx) { res = await runStep(step, prompt, stepRun, signal); }
+            else { const r = await runPersistentStep(step, prompt, stepRun, team.members[i], signal); team.members[i] = r.member; res = r.result; }
+            totalCost += res.usage?.cost ?? 0;
+            if (totalCost >= spendBudget) {
+              const choice = await ctx.ui.select(`Chain "${name}" spent $${totalCost.toFixed(3)} — budget $${spendBudget.toFixed(2)} reached.`,
+                [`Continue (raise to $${(spendBudget * 2).toFixed(2)})`, "Stop here"]);
+              if (!choice?.startsWith("Continue")) {
+                run.status = "done"; run.finishedAt = Date.now(); refreshWidget(); if (!chain.persist) teardownLiveTeam(); scheduleDismiss();
+                return { content: [{ type: "text", text: `Chain "${name}" stopped at budget. Last output:\n\n${finalOutput || "(none yet)"}` }], details: { chain: name } };
+              }
+            }
+            if (res.isError) {
+              stepRun.status = "error"; stepRun.note = res.reason || "step failed"; run.status = "error"; run.finishedAt = Date.now(); refreshWidget();
+              if (!chain.persist) teardownLiveTeam(); scheduleDismiss();
+              return { content: [{ type: "text", text: `Chain "${name}" failed at step ${i+1}: ${stepRun.note}` }], details: { chain: name, failedStep: i+1 }, isError: true };
+            }
+            stepRun.status = "done"; stepRun.elapsedMs = stepRun.startedAt ? Date.now() - stepRun.startedAt : undefined;
+            refreshWidget(); input = res.output; finalOutput = res.output;
+          }
+        } catch (err: any) {
+          run.status = "error"; run.finishedAt = Date.now(); refreshWidget(); if (!chain.persist) teardownLiveTeam(); scheduleDismiss();
+          return { content: [{ type: "text", text: `Chain "${name}" errored: ${err?.message ?? err}` }], details: {}, isError: true };
+        }
+        run.status = "done"; run.finishedAt = Date.now(); refreshWidget(); if (!chain.persist) teardownLiveTeam(); scheduleDismiss();
+        return { content: [{ type: "text", text: `Charter (chain) "${name}" completed.\n\n${finalOutput}` }], details: { chain: name, cost: totalCost } };
+      }
+      const teamDef = teams.get(name);
+      if (teamDef) return runTeam(teamDef, params.input, spendBudget, signal, onUpdate, ctx);
+      const avail = [...chains.keys(), ...teams.keys()].join(", ") || "(none)";
+      return { content: [{ type: "text", text: `Charter "${name}" not found. Available: ${avail}${errors.length ? `\nErrors: ${errors.join("; ")}` : ""}` }], details: {}, isError: true };
+    },
+    renderCall(args, theme, context) {
+      const name = (args as any).charter ?? "?";
+      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+      if (!context.argsComplete) {
+        text.setText(theme.fg("dim", "→ ") + theme.fg("toolTitle", theme.bold("run_charter ")) + theme.fg("warning", "⟳ composing…"));
+      } else {
+        text.setText(theme.fg("accent", "→ ") + theme.fg("toolTitle", theme.bold("run_charter ")) + theme.fg("accent", name));
+      }
+      return text;
+    },
+    renderResult(result, _opts, theme) {
+      if (result.isError) return new Text(theme.fg("error", "✗ ") + theme.fg("muted", result.content[0]?.text ?? ""), 0, 0);
+      return new Text(theme.fg("success", "✓ ") + theme.fg("muted", result.content[0]?.text.split("\n")[0] ?? ""), 0, 0);
     },
   });
 
