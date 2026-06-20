@@ -247,6 +247,20 @@ export default function (pi: ExtensionAPI) {
   // author charters, and loading the tools wastes their context budget.
   if (process.env.PI_SUBAGENT) return;
 
+  // ── Catalog digest injected into every turn's system prompt ───────────────
+  // before_agent_start fires before each LLM turn so the digest is always
+  // current (picks up new charters written mid-session). Appended as a small
+  // block after the existing system prompt — doesn't replace anything.
+
+  pi.on("before_agent_start", async (event) => {
+    const digest = catalogDigest();
+    if (!digest) return;
+    return {
+      systemPrompt: event.systemPrompt +
+        `\n\n<!-- catalog-digest -->\n${digest}\n<!-- /catalog-digest -->`,
+    };
+  });
+
   // ── catalog_list ────────────────────────────────────────────────────────────
 
   pi.registerTool({
