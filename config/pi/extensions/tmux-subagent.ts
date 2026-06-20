@@ -421,6 +421,9 @@ export default function (pi: ExtensionAPI) {
           ].join("\n").trimEnd(),
           display: true,
         }, { deliverAs: "followUp", triggerTurn: true });
+        // Coordinator is done — tear it down immediately rather than waiting
+        // for the pane to die on its own.
+        finishAgent(agent, state.output, false);
         return;
       }
 
@@ -452,7 +455,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     // Step 2: if pane is dead (agent exited without writing done state), clean up
-    if ((agent.status === "running" || agent.status === "idle") && !isPaneAlive(agent.paneId)) {
+    if ((agent.status === "running" || agent.status === "idle" || agent.status === "completed") && !isPaneAlive(agent.paneId)) {
       // Try one last read in case the file appeared between checks
       let output: string | undefined;
       if (existsSync(agent.stateFile)) {
