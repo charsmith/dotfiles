@@ -36,6 +36,8 @@ export interface MemberDef {
   // Team-specific
   role?: string;           // coordinator | specialist | etc.
   reports_to?: string;     // routing hint for retro analysis
+  context?: string;        // additional guidance injected into the member's first message
+  context_dir?: string;    // working-directory path injected into the member's first message
 }
 
 // ─── Charter definitions ──────────────────────────────────────────────────────
@@ -95,6 +97,8 @@ function parseMember(m: any): MemberDef | null {
     clearContext: typeof m.clearContext === "boolean" ? m.clearContext : undefined,
     role: m.role,
     reports_to: m.reports_to,
+    context: m.context,
+    context_dir: m.context_dir,
   };
 }
 

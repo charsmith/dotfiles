@@ -1,0 +1,16 @@
+kind: team
+description: "Coordinator-only team: the coordinator decomposes the task and spawns domain-appropriate specialists at runtime via launch_agent (dynamic formation)"
+topology: hub-spoke
+entry_point: research-coordinator
+guardrail: auto
+
+# Formation mode: DYNAMIC
+# research-coordinator has spawn_agents: true and is the only member,
+# so run_charter injects dynamic formation instructions (not coms-bus instructions).
+# The coordinator decides what specialists to spawn based on the task.
+# Blackboard and task-ledger are written to the work dir at launch.
+
+members:
+  - agent: research-coordinator
+    role: coordinator
+    description: "Decomposes the task, spawns domain specialists via launch_agent, routes through critic, synthesizes output.md"

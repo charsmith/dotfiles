@@ -619,6 +619,18 @@ export default function (pi: ExtensionAPI) {
               `| **Total** | | **${totals.turns}** | **${fmtTokens(totals.input)}** | **${fmtTokens(totals.output)}** | **$${totals.cost.toFixed(3)}** |`,
             ].join("\n");
             writeFileSync(path.join(agent.workDir, "info.md"), info, "utf-8");
+            // Update manifest.json with completion info (for retrospective + meta-system)
+            const manifestPath = path.join(agent.workDir, "manifest.json");
+            if (existsSync(manifestPath)) {
+              const mf = JSON.parse(readFileSync(manifestPath, "utf-8"));
+              mf.completed = new Date().toISOString();
+              mf.outcome = "success";
+              mf.usage = {
+                total_cost: totals.cost,
+                per_agent: rows.map(r => ({ agent: r.name, model: r.model ?? null, usage: r.usage ?? null })),
+              };
+              writeFileSync(manifestPath, JSON.stringify(mf, null, 2), "utf-8");
+            }
           } catch { /* ignore — don't let info.md failure block teardown */ }
         }
 
@@ -993,6 +1005,22 @@ export default function (pi: ExtensionAPI) {
     let totalCost = 0;
     const startedAt = Date.now();
 
+    // ── Work directory ────────────────────────────────────────────────────────
+    const workDir = path.join(agentTeamsWorkdir(), def.name, makeUnitOfWorkId(input));
+    mkdirSync(workDir, { recursive: true });
+    writeFileSync(path.join(workDir, "input.md"), input, "utf-8");
+    const runStarted = new Date().toISOString();
+    const manifest: Record<string, unknown> = {
+      charter: def.name, kind: "chain", run_id: chainId,
+      task: input, workDir, started: runStarted, budget,
+      steps: def.members.map((m, i) => ({
+        step: i + 1, agent: m.agent || null,
+        model: m.model ?? null, status: "pending",
+      })),
+      completed: null, outcome: null, cost: null,
+    };
+    writeFileSync(path.join(workDir, "manifest.json"), JSON.stringify(manifest, null, 2), "utf-8");
+
     for (let i = 0; i < def.members.length; i++) {
       const member = def.members[i];
       if (signal?.aborted) return { content: [{ type: "text", text: "Cancelled." }], details: {}, isError: true };
@@ -1072,14 +1100,44 @@ ${stepOutput.output}` }], details: { chain: def.name } };
 
       currentInput = stepOutput.output;
       finalOutput  = stepOutput.output;
+      // Update step status in manifest
+      const steps = manifest.steps as Array<Record<string, unknown>>;
+      if (steps[i]) { steps[i].status = stepOutput.isError ? "error" : "done"; steps[i].output = stepOutput.output.slice(0, 500); }
+      manifest.cost = totalCost;
+      writeFileSync(path.join(workDir, "manifest.json"), JSON.stringify(manifest, null, 2), "utf-8");
       onUpdate?.({ content: [{ type: "text", text: `Chain "${def.name}" step ${i + 1}/${def.members.length} done. $${totalCost.toFixed(3)}/$${budget.toFixed(2)}` }] });
     }
 
-    return {
-      content: [{ type: "text", text: `Charter (chain) "${def.name}" completed in ${fmtElapsed(Date.now() - startedAt)}.
+    // ── Write output + finalise manifest + info.md ─────────────────────────────────
+    const elapsed = fmtElapsed(Date.now() - startedAt);
+    writeFileSync(path.join(workDir, "output.md"), finalOutput, "utf-8");
+    manifest.completed = new Date().toISOString();
+    manifest.outcome   = "completed";
+    manifest.cost      = totalCost;
+    writeFileSync(path.join(workDir, "manifest.json"), JSON.stringify(manifest, null, 2), "utf-8");
+    writeFileSync(path.join(workDir, "info.md"), [
+      `# ${def.name}  —  chain run`,
+      ``,
+      `| Field   | Value |`,
+      `|---------|-------|`,
+      `| Run ID  | ${chainId} |`,
+      `| Started | ${runStarted} |`,
+      `| Elapsed | ${elapsed} |`,
+      `| Cost    | $${totalCost.toFixed(4)} |`,
+      `| Steps   | ${def.members.length} |`,
+      ``,
+      `## Task`,
+      ``,
+      input,
+      ``,
+      `## Output`,
+      ``,
+      finalOutput,
+    ].join("\n"), "utf-8");
 
-${finalOutput}` }],
-      details: { chain: def.name, cost: totalCost },
+    return {
+      content: [{ type: "text", text: `Charter (chain) "${def.name}" completed in ${elapsed}.\n\n${finalOutput}` }],
+      details: { chain: def.name, cost: totalCost, workDir },
     };
   }
 
@@ -1133,6 +1191,48 @@ ${finalOutput}` }],
       mkdirSync(workDir, { recursive: true });
       writeFileSync(path.join(workDir, "input.md"), params.input, "utf-8");
 
+      // ── Run manifest (start) ─────────────────────────────────────────────
+      // Machine-readable record of the team run — foundation for retrospective
+      // and meta-system. Updated at completion in pollAgentState.
+      const runStarted = new Date().toISOString();
+      const startManifest = {
+        charter: name, kind: "team" as const, run_id: unitId,
+        task: params.input, workDir, started: runStarted, budget,
+        members: teamDef.members.map(m => ({
+          agent: m.agent, role: m.role ?? "specialist", model: m.model ?? null,
+        })),
+        completed: null as string | null,
+        outcome: null as string | null,
+        usage: null as unknown,
+      };
+      writeFileSync(path.join(workDir, "manifest.json"), JSON.stringify(startManifest, null, 2), "utf-8");
+
+      // ── Shared blackboard (stub) ─────────────────────────────────────────
+      // Coordinator writes task graph, status updates, and claim notes here.
+      // Specialists can read for context. Ephemeral (per-run, not persistent KB).
+      writeFileSync(path.join(workDir, "blackboard.md"), [
+        `# Team Blackboard`,
+        ``,
+        `Charter: ${name}  |  Run: ${unitId}`,
+        `Started: ${runStarted}`,
+        ``,
+        `## Task`,
+        ``,
+        params.input,
+        ``,
+        `---`,
+        ``,
+        `<!-- Coordinator appends task graph, status updates, and claim notes below. -->`,
+        `<!-- Format:  ## [TaskGraph|Status|Claim] [timestamp]  /  agent: <name>  /  <content> -->`,
+      ].join("\n"), "utf-8");
+
+      // ── Task ledger (stub) ─────────────────────────────────────────────────
+      // Coordinator reads/writes this to track what's pending/in-progress/done.
+      // Machine-readable; also the source of truth for credit assignment in retro.
+      writeFileSync(path.join(workDir, "task-ledger.json"), JSON.stringify({
+        run_id: unitId, task: params.input, started: runStarted, subtasks: [],
+      }, null, 2), "utf-8");
+
       const spawnErr: string[] = [];
       const warnings: string[] = [];
       const workers = teamDef.members.filter(m => m.agent !== coordName);
@@ -1148,30 +1248,70 @@ ${finalOutput}` }],
         const personaSource = agentDef ? "file" : (inlinePrompt ? "inline" : "none");
         if (personaSource === "none") warnings.push(`"${member.agent}" has no agent.md and no description — launching without persona`);
         try {
-          launchTeamMember({
-            name: member.agent,
-            task: isCoord ? [
-              `You have been assigned a coordinated research task. Your team is available on the coms bus (project: "${project}").`,
+          // Build the coordinator task text based on formation mode:
+          //   dynamic  — coordinator has spawn_agents: true and no pre-declared workers;
+          //              uses launch_agent to form the team at runtime
+          //   static   — pre-declared workers already on the coms-bus;
+          //              coordinator uses coms_list + coms_send
+          const memberTask = isCoord ? (() => {
+            const isDynamic = (agentDef?.spawnAgents ?? false) && workers.length === 0;
+            if (isDynamic) {
+              return [
+                `You are the coordinator for a dynamic research team. You spawn the specialists this task requires.`,
+                ``,
+                `Task: ${params.input}`,
+                ``,
+                `Steps:`,
+                `1. Read your task from: ${workDir}/input.md`,
+                `2. Decompose into subtasks — write your task graph to: ${workDir}/blackboard.md`,
+                `3. Write the initial subtask list to: ${workDir}/task-ledger.json`,
+                `4. For each subtask: spawn a domain-appropriate specialist via launch_agent (mode: "blocking")`,
+                `   Use a domain-specific system_prompt for each specialist's area of expertise`,
+                `   Request structured findings: Claims / Evidence+Source / Confidence / Open Questions`,
+                `5. Route all findings through the critic agent (agent: "critic", mode: "blocking") before synthesis`,
+                `6. Reconcile any critic challenges — resolve or explicitly note as uncertainties`,
+                `7. Write your final report to: ${workDir}/output.md`,
+                ``,
+                `CRITICAL: Use the write tool to create output.md. Do NOT write the report as plain chat text.`,
+                `Do not create output.md until ALL work is complete and synthesized.`,
+              ].join("\n");
+            }
+            return [
+              `You have been assigned a coordinated research task. Your team is on the coms bus (project: "${project}").`,
               ``,
               `Task: ${params.input}`,
               ``,
               `Steps:`,
               `1. Use coms_list to see available team members`,
-              `2. Delegate the task to the appropriate specialist via coms_send`,
-              `3. Wait for the reply — it arrives automatically as your next turn, do NOT poll`,
-              `4. Synthesize the findings`,
-              `5. Use the write tool to write your complete report to: ${workDir}/output.md`,
-              `6. Stop after writing output.md — do not write it as chat text, it must be a file`,
-            ].join("\n") :
-              `You are a ${member.role || "specialist"} on team "${name}". ` +
-              `Wait for instructions on coms bus project "${project}". ` +
-              (member.description ? `Your role: ${member.description}` : ""),
+              `2. Read your task from: ${workDir}/input.md`,
+              `3. Decompose the task — write your task graph to: ${workDir}/blackboard.md`,
+              `4. Delegate subtasks via coms_send — replies arrive automatically as your next turn, do NOT poll`,
+              `5. Update task-ledger.json at: ${workDir}/task-ledger.json as subtasks complete`,
+              `6. Synthesize all findings`,
+              `7. Use the write tool to write your complete report to: ${workDir}/output.md`,
+              ``,
+              `CRITICAL: You MUST use the write tool to create output.md at the path above.`,
+              `Do NOT write the report as plain chat text — it must be a file on disk.`,
+              `Your session detects completion by checking that file exists. No file = not done.`,
+              `Do not create output.md until ALL work is complete and synthesized.`,
+            ].join("\n");
+          })() :
+            [`You are a ${member.role || "specialist"} on team "${name}". ` +
+            `Wait for instructions on coms bus project "${project}". ` +
+            (member.description ? `Your role: ${member.description}` : ""),
+            ...(member.context ? [`\n${member.context}`] : []),
+            ...(member.context_dir ? [`\nYour working directory for this role: ${member.context_dir}`] : []),
+            ].join("");
+          launchTeamMember({
+            name: member.agent,
+            task: memberTask,
             team: project,
             agentDef,
             systemPrompt: inlinePrompt,
             coordinator: isCoord,
             workDir: isCoord ? workDir : undefined,
             budget: isCoord ? budget : undefined,
+            model: member.model,
           }, ctx);
         } catch (err: any) { spawnErr.push(`Spawn "${member.agent}": ${err?.message ?? err}`); }
       }
