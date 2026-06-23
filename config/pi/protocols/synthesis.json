@@ -1,0 +1,27 @@
+{
+  "name": "synthesis",
+  "description": "Architectural synthesis or critic review. Write full output to a file; return a structured confirmation with an explicit all-clear signal.",
+  "schema": {
+    "type": "object",
+    "required": ["output_file", "all_clear"],
+    "properties": {
+      "output_file": {
+        "type": "string",
+        "description": "Absolute path to the synthesis or review file"
+      },
+      "all_clear": {
+        "type": "boolean",
+        "description": "true = findings are ready to proceed; false = challenged claims require resolution"
+      },
+      "challenged_claims": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Brief description of each challenged claim and its resolution path (only when all_clear is false)"
+      },
+      "open_questions": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    }
+  }
+}

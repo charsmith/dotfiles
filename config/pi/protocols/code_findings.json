@@ -1,0 +1,28 @@
+{
+  "name": "code_findings",
+  "description": "Source code research findings. Write full evidence (file paths, line numbers, github.netflix.net URLs) to a findings file; return a small structured confirmation. Never put raw evidence content in the coms message itself.",
+  "schema": {
+    "type": "object",
+    "required": ["findings_file", "claim_count", "open_questions"],
+    "properties": {
+      "findings_file": {
+        "type": "string",
+        "description": "Absolute path to the findings file containing all claims and evidence"
+      },
+      "claim_count": {
+        "type": "integer",
+        "description": "Number of verified claims written to the findings file"
+      },
+      "repos_cloned": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "New repos cloned during this task, format: 'service-key: ~/code/nflx/repo'"
+      },
+      "open_questions": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Questions that could not be resolved with available tools"
+      }
+    }
+  }
+}

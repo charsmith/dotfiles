@@ -1,0 +1,23 @@
+{
+  "name": "catalog_findings",
+  "description": "Data catalog research findings (table metadata, lineage, ACL). Write full results to a findings file; return a structured confirmation.",
+  "schema": {
+    "type": "object",
+    "required": ["findings_file", "tables_examined", "open_questions"],
+    "properties": {
+      "findings_file": {
+        "type": "string",
+        "description": "Absolute path to the findings file"
+      },
+      "tables_examined": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Table names queried (db.table format)"
+      },
+      "open_questions": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    }
+  }
+}
