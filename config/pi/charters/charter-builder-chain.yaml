@@ -1,9 +1,0 @@
-kind: chain
-description: "User describes a task → charter-planner reads the charter catalog and outputs a structured JSON spec → charter-builder receives that JSON and writes the charter YAML file using charter_author."
-
-steps:
-  - agent: charter-planner
-    prompt: "$INPUT"
-
-  - agent: charter-builder
-    prompt: "$INPUT"
