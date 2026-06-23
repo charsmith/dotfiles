@@ -1,6 +1,7 @@
 _gitconfig
 config/tmux/plugins
 *.bak
+*.bak.*
 *.v0.json
 .pi/
 # Machine-local shell overrides (never committed)
