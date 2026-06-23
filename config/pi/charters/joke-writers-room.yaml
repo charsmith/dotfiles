@@ -1,0 +1,42 @@
+kind: team
+description: Data platform comedy writers room — coordinator grounds jokes in real platform research (og/cy/ns), writes jokes, punches them up for comedic structure, then critiques and packages a speaker-ready set
+topology: hub-spoke
+entry_point: joke-room-coordinator
+guardrail: auto
+
+# Flow:
+#   1. coordinator asks platform-researcher for real tool names, pain points, migrations
+#   2. coordinator passes research + topic to joke-writer (research is raw material, not the punchline)
+#   3. coordinator routes jokes to joke-punchup to tighten structure: setup → misdirect → punchline
+#   4. coordinator routes punched-up jokes to joke-critic for rating, cutting, sequencing
+#   5. coordinator synthesizes final speaker-ready joke card
+
+members:
+  - agent: joke-room-coordinator
+    role: coordinator
+    description: "Receive the joke topic. Ask platform-researcher for real tool/system context first — never skip this step. Pass research + topic to joke-writer. Route output to joke-critic. Synthesize the final speaker-ready card."
+
+  - name: platform-researcher
+    agent: dp-platform-engineer
+    role: specialist
+    description: "Answer research questions about real Netflix data platform tools, systems, and pain points. Use og (code search), cy (data catalog), and ns (internal docs/Manuals/Slack) to find: actual tool names, known issues, migration history, deprecation status, and any context that would make a data platform engineer nod in recognition. Return structured findings the joke-writer can use directly."
+    context_dir: /Users/charsmith/Documents/the_vault/dp-knowledge-base/
+    reports_to: joke-room-coordinator
+
+  - name: joke-writer
+    agent: dp-joke-writer
+    role: specialist
+    description: "Receive the joke topic AND the platform research findings. Write 6–8 jokes using real tool names and pain points as raw material. Each joke needs a setup, misdirect, and punchline — not a bug report."
+    reports_to: joke-room-coordinator
+
+  - name: joke-punchup
+    agent: dp-joke-punchup
+    role: specialist
+    description: "Receive the raw joke set from joke-writer. Rewrite each joke to tighten the setup, sharpen the misdirect, and cut the punchline to its shortest funny form. Fix bug-report energy. Output the full punched-up set ready for the critic."
+    reports_to: joke-room-coordinator
+
+  - name: joke-critic
+    agent: dp-joke-critic
+    role: specialist
+    description: "Rate, cut, and sequence the joke set. Score 1–5, flag insider risk, recommend KEEP/CUT/REVISE for each. Return the approved set with delivery notes."
+    reports_to: joke-room-coordinator

@@ -1,15 +1,23 @@
 kind: team
-description: "A research lead coordinates an analyst to research any topic and produce a structured report"
+description: "Research lead decomposes a task, coordinates an analyst (grounded findings) and a critic (verification), then synthesizes into a structured report"
 topology: hub-spoke
 entry_point: research-lead
 guardrail: auto
 
+# Output contract: every specialist returns Claims / Evidence+Source / Confidence / Open Questions.
+# Flow: decompose → dispatch to analyst → route findings through critic → reconcile → synthesize output.md
+
 members:
   - agent: research-lead
     role: coordinator
-    description: "Delegates research tasks and synthesizes findings into output.md"
+    description: "Decomposes task into a graph, dispatches subtasks, routes findings through critic, reconciles, synthesizes output.md"
 
   - agent: analyst
     role: specialist
-    description: "Researches assigned topics and reports findings back to the lead"
+    description: "Grounds findings in real sources; returns structured Claims/Evidence/Confidence/Open-Questions"
+    reports_to: research-lead
+
+  - agent: critic
+    role: specialist
+    description: "Reviews analyst findings; flags unsupported claims, gaps, and contradictions before synthesis"
     reports_to: research-lead

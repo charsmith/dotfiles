@@ -10,3 +10,5 @@ members:
       Tagline to critique: $INPUT
 
       (The original product idea was: $ORIGINAL)
+
+      Reply with exactly 3 sentences: first restate the tagline, then one sentence praising it, then one sharp criticism.
