@@ -17,6 +17,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { parseYaml } from "./mini-yaml.ts";
+import { workspaceAgentDir, workspaceCharterDir } from "./workspace.ts";
 
 // ─── Unified member definition ────────────────────────────────────────────────
 //
@@ -70,17 +71,21 @@ export type StepDef = MemberDef;
 // ─── File paths ───────────────────────────────────────────────────────────────
 
 export function charterDirs(): string[] {
-  return [
-    path.join(os.homedir(), ".config", "pi", "charters"),
-    path.join(process.cwd(), ".pi", "charters"),
-  ];
+  const dirs: string[] = [];
+  const ws = workspaceCharterDir();
+  if (ws) dirs.push(ws);
+  dirs.push(path.join(process.cwd(), ".pi", "charters"));
+  if (!ws) dirs.push(path.join(os.homedir(), ".config", "pi", "charters"));
+  return dirs;
 }
 
 export function legacyChainFiles(): string[] {
-  return [
-    path.join(os.homedir(), ".config", "pi", "agents", "agent-chain.yaml"),
-    path.join(process.cwd(), ".pi", "agents", "agent-chain.yaml"),
-  ];
+  const files: string[] = [];
+  const ws = workspaceAgentDir();
+  if (ws) files.push(path.join(ws, "agent-chain.yaml"));
+  files.push(path.join(process.cwd(), ".pi", "agents", "agent-chain.yaml"));
+  if (!ws) files.push(path.join(os.homedir(), ".config", "pi", "agents", "agent-chain.yaml"));
+  return files;
 }
 
 // ─── Parsing ──────────────────────────────────────────────────────────────────

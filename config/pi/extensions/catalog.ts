@@ -1,14 +1,21 @@
 /**
  * catalog — unified view of all agents, chains, and teams.
  *
- * Tools:    catalog_list, catalog_read, catalog_validate
- * Commands: /catalog [filter]
+ * Tools:    catalog_list, catalog_read, catalog_validate,
+ *           agent_author, charter_author
+ * Commands: /ag:catalog [filter|name]
  *
- * The catalog is derived on-demand from the filesystem:
- *   Agents: ~/.config/pi/agents/*.md  (YAML frontmatter + system prompt)
- *   Chains + Teams: agent-chain.yaml  (kind: chain | kind: team)
+ * Paths are resolved from agent-workspace.json (see lib/workspace.ts).
+ * After every write, an auto-commit is made to the workspace git repo
+ * using a conventional-commit message derived from the file path alone —
+ * no LLM involved.
  *
- * No index file — always in sync with the source files.
+ * Read order (first-seen wins on name clash):
+ *   workspace/agents/*.md
+ *   workspace/charters/*.yaml
+ *   .pi/agents/*.md          (project-local)
+ *   .pi/charters/*.yaml      (project-local)
+ *   legacy agent-chain.yaml  (back-compat)
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -17,6 +24,13 @@ import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import {
+  commitWorkspaceFile,
+  getWorkspace,
+  workspaceAgentDir,
+  workspaceCharterDir,
+  workspaceSkillsDir,
+} from "./lib/workspace.ts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -50,28 +64,45 @@ interface Catalog {
   teams: TeamEntry[];
 }
 
+// ─── Path resolution ──────────────────────────────────────────────────────────
+
+/** Directories to scan for agent .md files (workspace first, then project-local). */
+function agentDirs(): string[] {
+  const dirs: string[] = [];
+  const ws = workspaceAgentDir();
+  if (ws) dirs.push(ws);
+  dirs.push(path.join(process.cwd(), ".pi", "agents"));
+  // Legacy fallback when no workspace configured
+  if (!ws) dirs.push(path.join(os.homedir(), ".config", "pi", "agents"));
+  return dirs;
+}
+
+/** Directories to scan for per-file charter .yaml files. */
+function charterDirs(): string[] {
+  const dirs: string[] = [];
+  const ws = workspaceCharterDir();
+  if (ws) dirs.push(ws);
+  dirs.push(path.join(process.cwd(), ".pi", "charters"));
+  if (!ws) dirs.push(path.join(os.homedir(), ".config", "pi", "charters"));
+  return dirs;
+}
+
+/** Legacy monolithic agent-chain.yaml locations (back-compat only). */
+function legacyChainFiles(): string[] {
+  const files: string[] = [];
+  const ws = workspaceAgentDir();
+  if (ws) files.push(path.join(ws, "agent-chain.yaml"));
+  files.push(path.join(process.cwd(), ".pi", "agents", "agent-chain.yaml"));
+  if (!ws) files.push(path.join(os.homedir(), ".config", "pi", "agents", "agent-chain.yaml"));
+  return files;
+}
+
 // ─── Catalog readers ──────────────────────────────────────────────────────────
-
-const AGENT_DIRS = [
-  path.join(os.homedir(), ".config", "pi", "agents"),
-  path.join(os.homedir(), ".pi", "agents"),
-];
-
-const CHARTER_DIRS = [
-  path.join(os.homedir(), ".config", "pi", "charters"),
-  path.join(process.cwd(), ".pi", "charters"),
-];
-
-// Back-compat: legacy monolithic file
-const LEGACY_CHAIN_FILES = [
-  path.join(os.homedir(), ".config", "pi", "agents", "agent-chain.yaml"),
-  path.join(process.cwd(), ".pi", "agents", "agent-chain.yaml"),
-];
 
 function readAgents(): AgentEntry[] {
   const seen = new Set<string>();
   const out: AgentEntry[] = [];
-  for (const dir of AGENT_DIRS) {
+  for (const dir of agentDirs()) {
     if (!existsSync(dir)) continue;
     for (const f of readdirSync(dir)) {
       if (!f.endsWith(".md")) continue;
@@ -104,9 +135,7 @@ function readAgents(): AgentEntry[] {
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-// Minimal YAML parser — handles enough for agent-chain.yaml.
-// Re-implements just what we need rather than importing mini-yaml.ts
-// (which lives in the pi-chain extension and isn't re-exported).
+// Minimal YAML parser for charter files.
 function parseSimpleYaml(src: string): Record<string, any> {
   const lines = src.split(/\r?\n/);
   const root: Record<string, any> = {};
@@ -138,7 +167,6 @@ function parseSimpleYaml(src: string): Record<string, any> {
       if (m) {
         currentKey = m[1];
         const inlineVal = m[2].replace(/^["']|["']$/g, "").trim();
-        // If there's an inline scalar value, store it directly; otherwise start a block
         if (inlineVal) { root[m[1]] = inlineVal; currentKey = null; currentObj = null; }
         else { currentObj = {}; }
       }
@@ -178,7 +206,11 @@ function parseSimpleYaml(src: string): Record<string, any> {
   return root;
 }
 
-function ingestCharterBlock(name: string, raw: any, seenChains: Set<string>, seenTeams: Set<string>, chains: ChainEntry[], teams: TeamEntry[]) {
+function ingestCharterBlock(
+  name: string, raw: any,
+  seenChains: Set<string>, seenTeams: Set<string>,
+  chains: ChainEntry[], teams: TeamEntry[],
+) {
   if (!raw || typeof raw !== "object") return;
   if (raw.kind === "chain" && !seenChains.has(name)) {
     seenChains.add(name);
@@ -199,8 +231,7 @@ function readChainsAndTeams(): { chains: ChainEntry[]; teams: TeamEntry[] } {
   const seenChains = new Set<string>();
   const seenTeams  = new Set<string>();
 
-  // Per-file charters (primary)
-  for (const dir of CHARTER_DIRS) {
+  for (const dir of charterDirs()) {
     if (!existsSync(dir)) continue;
     let files: string[];
     try { files = readdirSync(dir).filter((f: string) => f.endsWith(".yaml") || f.endsWith(".yml")); }
@@ -214,8 +245,7 @@ function readChainsAndTeams(): { chains: ChainEntry[]; teams: TeamEntry[] } {
     }
   }
 
-  // Legacy monolithic agent-chain.yaml
-  for (const file of LEGACY_CHAIN_FILES) {
+  for (const file of legacyChainFiles()) {
     if (!existsSync(file)) continue;
     let doc: Record<string, any>;
     try { doc = parseSimpleYaml(readFileSync(file, "utf-8")); }
@@ -229,12 +259,10 @@ function readChainsAndTeams(): { chains: ChainEntry[]; teams: TeamEntry[] } {
 }
 
 function buildCatalog(): Catalog {
-  const agents = readAgents();
-  const { chains, teams } = readChainsAndTeams();
-  return { agents, chains, teams };
+  return { agents: readAgents(), ...readChainsAndTeams() };
 }
 
-// ─── Catalog digest (compact one-liner per entry for session context) ─────────
+// ─── Catalog digest (compact one-liner per entry, injected into session context)
 
 export function catalogDigest(): string {
   const { agents, chains, teams } = buildCatalog();
@@ -254,7 +282,20 @@ export default function (pi: ExtensionAPI) {
   // author charters, and loading the tools wastes their context budget.
   if (process.env.PI_SUBAGENT) return;
 
-  // ── catalog_list ────────────────────────────────────────────────────────────
+  // ── Expose workspace skills path via resources_discover ──────────────────
+  //
+  // workspace/skills/ sits alongside agents/ and charters/. Any skill
+  // subdirectory there (e.g. skills/catalog/) is discovered automatically.
+  // Symlinked skills in ~/.config/pi/skills/ are picked up by pi natively.
+
+  pi.on("resources_discover", (_event, _ctx) => {
+    const skillsDir = workspaceSkillsDir();
+    if (skillsDir && existsSync(skillsDir)) {
+      return { skillPaths: [skillsDir] };
+    }
+  });
+
+  // ── catalog_list ──────────────────────────────────────────────────────────
 
   pi.registerTool({
     name: "catalog_list",
@@ -307,7 +348,10 @@ export default function (pi: ExtensionAPI) {
       }
 
       if (!lines.length) lines.push("Catalog is empty.");
-      return { content: [{ type: "text" as const, text: lines.join("\n") }], details: { agents: agents.length, chains: chains.length, teams: teams.length } };
+      return {
+        content: [{ type: "text" as const, text: lines.join("\n") }],
+        details: { agents: agents.length, chains: chains.length, teams: teams.length },
+      };
     },
     renderCall(_args, theme) {
       return new Text(theme.fg("toolTitle", theme.bold("catalog_list")), 0, 0);
@@ -319,7 +363,7 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // ── catalog_read ────────────────────────────────────────────────────────────
+  // ── catalog_read ──────────────────────────────────────────────────────────
 
   pi.registerTool({
     name: "catalog_read",
@@ -335,11 +379,9 @@ export default function (pi: ExtensionAPI) {
       const { agents, chains, teams } = buildCatalog();
       const n = params.name;
 
-      // Check teams first
       const team = teams.find(t => t.name === n);
       if (team) {
-        // Charter lives as its own file under CHARTER_DIRS
-        for (const dir of CHARTER_DIRS) {
+        for (const dir of charterDirs()) {
           for (const ext of [".yaml", ".yml"]) {
             const file = path.join(dir, `${n}${ext}`);
             if (!existsSync(file)) continue;
@@ -352,10 +394,9 @@ export default function (pi: ExtensionAPI) {
         return { content: [{ type: "text" as const, text: `Team "${n}" found in catalog but charter file could not be read.` }], details: { kind: "team" } };
       }
 
-      // Check chains (individual charter files first, then legacy monolithic file)
       const chain = chains.find(c => c.name === n);
       if (chain) {
-        for (const dir of CHARTER_DIRS) {
+        for (const dir of charterDirs()) {
           for (const ext of [".yaml", ".yml"]) {
             const file = path.join(dir, `${n}${ext}`);
             if (!existsSync(file)) continue;
@@ -365,8 +406,7 @@ export default function (pi: ExtensionAPI) {
             } catch { /* try next */ }
           }
         }
-        // Fall back to legacy monolithic agent-chain.yaml
-        for (const file of LEGACY_CHAIN_FILES) {
+        for (const file of legacyChainFiles()) {
           if (!existsSync(file)) continue;
           const raw = readFileSync(file, "utf-8");
           const blockMatch = raw.match(new RegExp(`(^${n}:\\s*\\n(?:[ \\t]+.*\\n?)*)`, "m"));
@@ -375,7 +415,6 @@ export default function (pi: ExtensionAPI) {
         return { content: [{ type: "text" as const, text: `Chain "${n}" found in catalog but charter file could not be read.` }], details: { kind: "chain" } };
       }
 
-      // Check agents
       const agent = agents.find(a => a.name === n);
       if (agent) {
         try {
@@ -400,7 +439,7 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // ── catalog_validate ────────────────────────────────────────────────────────
+  // ── catalog_validate ──────────────────────────────────────────────────────
 
   pi.registerTool({
     name: "catalog_validate",
@@ -418,12 +457,11 @@ export default function (pi: ExtensionAPI) {
 
       if (named) {
         return {
-          content: [{ type: "text" as const, text: `✓ "${params.input}" is a valid ${named.name ? "team" in named ? "team" : "chain" : "entry"} in the catalog.` }],
+          content: [{ type: "text" as const, text: `✓ "${params.input}" is valid in the catalog.` }],
           details: { valid: true, name: params.input },
         };
       }
 
-      // Try parsing as raw YAML
       let doc: Record<string, any>;
       try { doc = parseSimpleYaml(params.input); }
       catch (e: any) {
@@ -440,8 +478,6 @@ export default function (pi: ExtensionAPI) {
           if (!Array.isArray(raw.members) || raw.members.length === 0) errs.push(`team "${name}": missing or empty members`);
           if (raw.entry_point && !raw.members?.some((m: any) => m.agent === raw.entry_point))
             errs.push(`team "${name}": entry_point "${raw.entry_point}" not in members`);
-          // Duplicate agent types without distinct name: fields cause a coms-bus
-          // race condition where two agents register with the same inbox name.
           const agentCounts = new Map<string, number>();
           for (const m of (raw.members ?? [])) if (m.agent) agentCounts.set(m.agent, (agentCounts.get(m.agent) ?? 0) + 1);
           for (const [agent, count] of agentCounts) {
@@ -449,7 +485,7 @@ export default function (pi: ExtensionAPI) {
               const instances = (raw.members ?? []).filter((m: any) => m.agent === agent);
               const names = instances.map((m: any) => m.name).filter(Boolean);
               if (names.length < count)
-                errs.push(`team "${name}": ${count} members use agent "${agent}" but not all have a distinct name: field — add name: to each to prevent coms-bus routing collisions`);
+                errs.push(`team "${name}": ${count} members use agent "${agent}" — add a distinct name: field to each to prevent coms-bus routing collisions`);
               else if (new Set(names).size < names.length)
                 errs.push(`team "${name}": duplicate name: values among members using agent "${agent}" — each must be unique`);
             }
@@ -472,53 +508,55 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // ── /catalog command ────────────────────────────────────────────────────────
+  // ── /ag:catalog command ───────────────────────────────────────────────────
 
   pi.registerCommand("ag:catalog", {
-    description: "List all agents, chains, and teams.  /catalog [agent|chain|team]  or  /catalog <name>",
+    description: "List agents/chains/teams.  /ag:catalog [agent|chain|team|<name>]",
     handler: async (args, ctx) => {
       const arg = (args ?? "").trim();
       const { agents, chains, teams } = buildCatalog();
+      const ws = getWorkspace();
 
-      // /catalog <name> — show full detail
-      const allEntries = [...teams.map(t => ({ ...t, kind: "team" })), ...chains.map(c => ({ ...c, kind: "chain" })), ...agents.map(a => ({ ...a, kind: "agent" }))];
+      const allEntries = [
+        ...teams.map(t => ({ ...t, kind: "team" })),
+        ...chains.map(c => ({ ...c, kind: "chain" })),
+        ...agents.map(a => ({ ...a, kind: "agent" })),
+      ];
       const match = allEntries.find(e => e.name === arg);
       if (match) {
         if (match.kind === "agent") {
           const a = agents.find(x => x.name === arg)!;
-          const body = `AGENT: ${a.name}\n${a.description}\nSkills: ${a.skills || "none"}  spawn_agents: ${a.spawnAgents}\nFile: ${a.filePath}`;
-          ctx.ui.notify(body, "info"); return;
+          ctx.ui.notify(`AGENT: ${a.name}\n${a.description}\nSkills: ${a.skills || "none"}  spawn_agents: ${a.spawnAgents}\nFile: ${a.filePath}`, "info");
+          return;
         }
         if (match.kind === "team") {
           const t = teams.find(x => x.name === arg)!;
-          const body = `TEAM: ${t.name}\n${t.description ?? ""}\nTopology: ${t.topology}  Guardrail: ${t.guardrail}\nMembers: ${t.members.join(", ")}\nEntry point: ${t.entry_point ?? "(none)"}`;
-          ctx.ui.notify(body, "info"); return;
+          ctx.ui.notify(`TEAM: ${t.name}\n${t.description ?? ""}\nTopology: ${t.topology}  Guardrail: ${t.guardrail}\nMembers: ${t.members.join(", ")}\nEntry point: ${t.entry_point ?? "(none)"}`, "info");
+          return;
         }
         if (match.kind === "chain") {
           const c = chains.find(x => x.name === arg)!;
-          const body = `CHAIN: ${c.name}\n${c.description ?? ""}\n${c.steps} steps  persist: ${c.persist}`;
-          ctx.ui.notify(body, "info"); return;
+          ctx.ui.notify(`CHAIN: ${c.name}\n${c.description ?? ""}\n${c.steps} steps  persist: ${c.persist}`, "info");
+          return;
         }
       }
 
-      // /catalog [filter]
       const filter = ["agent", "chain", "team"].includes(arg) ? arg : null;
       const lines: string[] = [];
+      if (ws) lines.push(`Workspace: ${ws.workspace}`);
 
       if (!filter || filter === "team") {
-        lines.push(`TEAMS (${teams.length})`);
+        lines.push(`\nTEAMS (${teams.length})`);
         for (const t of teams) lines.push(`  ${t.name}  [${t.members.length} members]  ${t.description ?? ""}`);
         if (!teams.length) lines.push("  (none)");
       }
       if (!filter || filter === "chain") {
-        if (lines.length) lines.push("");
-        lines.push(`CHAINS (${chains.length})`);
+        lines.push(`\nCHAINS (${chains.length})`);
         for (const c of chains) lines.push(`  ${c.name}  [${c.steps} steps]  ${c.description ?? ""}`);
         if (!chains.length) lines.push("  (none)");
       }
       if (!filter || filter === "agent") {
-        if (lines.length) lines.push("");
-        lines.push(`AGENTS (${agents.length})`);
+        lines.push(`\nAGENTS (${agents.length})`);
         for (const a of agents) lines.push(`  ${a.name}  ${a.description}`);
         if (!agents.length) lines.push("  (none)");
       }
@@ -527,13 +565,13 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // ── agent_author ────────────────────────────────────────────────────────
+  // ── agent_author ──────────────────────────────────────────────────────────
 
   pi.registerTool({
     name: "agent_author",
     label: "Agent Author",
     description:
-      "Write or update an agent definition at ~/.config/pi/agents/<name>.md. " +
+      "Write or update an agent definition at <workspace>/agents/<name>.md. " +
       "Validates frontmatter before writing. Creates a .bak backup if the file exists. " +
       "Always use this instead of writing agent files directly.",
     promptSnippet: "Create or update an agent definition",
@@ -544,8 +582,6 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(_id, params) {
       const safeName = params.name.replace(/[^a-zA-Z0-9_-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
-      const dir  = path.join(os.homedir(), ".config", "pi", "agents");
-      const dest = path.join(dir, `${safeName}.md`);
 
       // Validate frontmatter
       const fmMatch = params.content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
@@ -558,34 +594,52 @@ export default function (pi: ExtensionAPI) {
       if (!fm.name) return { content: [{ type: "text" as const, text: "Error: frontmatter must include a 'name' field." }], details: {}, isError: true };
       if (!fm.description) return { content: [{ type: "text" as const, text: "Error: frontmatter must include a 'description' field." }], details: {}, isError: true };
 
-      if (existsSync(dest) && !params.overwrite) {
+      const dir  = workspaceAgentDir() ?? path.join(os.homedir(), ".config", "pi", "agents");
+      const dest = path.join(dir, `${safeName}.md`);
+      const isNew = !existsSync(dest);
+
+      if (!isNew && !params.overwrite) {
         return { content: [{ type: "text" as const, text: `Error: agent "${safeName}" already exists. Pass overwrite:true to replace it.` }], details: {}, isError: true };
       }
-      if (existsSync(dest)) {
-        // Backup before overwrite
+      if (!isNew) {
         writeFileSync(`${dest}.bak.${Date.now()}`, readFileSync(dest, "utf-8"), "utf-8");
       }
+
       mkdirSync(dir, { recursive: true });
       writeFileSync(dest, params.content, "utf-8");
-      return { content: [{ type: "text" as const, text: `Agent "${safeName}" written to ${dest}` }], details: { path: dest } };
+
+      // Auto-commit to workspace repo
+      const relPath = `agents/${safeName}.md`;
+      const commit = commitWorkspaceFile(relPath, isNew);
+      const commitNote = commit.committed
+        ? ` (committed ${commit.hash}: ${commit.message})`
+        : commit.error ? ` (commit failed: ${commit.error})` : "";
+
+      const verb = isNew ? "written" : "updated";
+      return {
+        content: [{ type: "text" as const, text: `Agent "${safeName}" ${verb} to ${dest}${commitNote}` }],
+        details: { path: dest, committed: commit.committed, hash: commit.hash },
+      };
     },
     renderCall(args, theme) {
       return new Text(theme.fg("toolTitle", theme.bold("agent_author ")) + theme.fg("accent", (args as any).name ?? "?"), 0, 0);
     },
     renderResult(result, _opts, theme) {
-      return new Text(result.isError ? theme.fg("error", "✗ ") + result.content[0]?.text : theme.fg("success", "✓ ") + theme.fg("muted", result.content[0]?.text ?? ""), 0, 0);
+      return new Text(result.isError
+        ? theme.fg("error", "✗ ") + result.content[0]?.text
+        : theme.fg("success", "✓ ") + theme.fg("muted", result.content[0]?.text ?? ""), 0, 0);
     },
   });
 
-  // ── charter_author ─────────────────────────────────────────────────────
+  // ── charter_author ────────────────────────────────────────────────────────
 
   pi.registerTool({
     name: "charter_author",
     label: "Charter Author",
     description:
-      "Write a new charter (team or chain) to ~/.config/pi/charters/<name>.yaml. " +
+      "Write a new charter (team or chain) to <workspace>/charters/<name>.yaml. " +
       "Validates structure before writing. Creates a .bak backup if overwriting. " +
-      "The yaml_content must be the charter body only (no top-level name key — the filename is the name). " +
+      "The yaml_content must be the charter body only (no top-level name key). " +
       "Always use this instead of writing charter files directly.",
     promptSnippet: "Create or update a team or chain charter",
     parameters: Type.Object({
@@ -595,21 +649,19 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(_id, params) {
       const safeName = params.name.replace(/[^a-zA-Z0-9_-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
-      const dir  = path.join(os.homedir(), ".config", "pi", "charters");
-      const dest = path.join(dir, `${safeName}.yaml`);
 
-      // Basic validation
+      // Validate
       const errs: string[] = [];
       const kindMatch = params.yaml_content.match(/^kind:\s*(\S+)/m);
-      if (!kindMatch) { errs.push("Missing 'kind: chain' or 'kind: team'"); }
-      else {
+      if (!kindMatch) {
+        errs.push("Missing 'kind: chain' or 'kind: team'");
+      } else {
         const kind = kindMatch[1];
         if (kind === "chain") {
-          if (!/steps:/m.test(params.yaml_content) && !/members:/m.test(params.yaml_content)) errs.push("kind:chain requires a 'steps' or 'members' list");
+          if (!/steps:/m.test(params.yaml_content) && !/members:/m.test(params.yaml_content))
+            errs.push("kind:chain requires a 'steps' or 'members' list");
         } else if (kind === "team") {
           if (!/members:/m.test(params.yaml_content)) errs.push("kind:team requires a 'members' list");
-          // Duplicate agent types without distinct name: fields — parse members
-          // to check. Uses a simple regex scan since full YAML parsing isn't available here.
           const memberBlocks = params.yaml_content.split(/\n  - /g).slice(1);
           const memberAgents: string[] = [];
           const memberNames: string[] = [];
@@ -618,9 +670,9 @@ export default function (pi: ExtensionAPI) {
             const nameM  = block.match(/\bname:\s*(\S+)/);
             if (agentM) { memberAgents.push(agentM[1]); memberNames.push(nameM?.[1] ?? ""); }
           }
-          const agentCounts2 = new Map<string, number[]>();
-          memberAgents.forEach((a, i) => { if (!agentCounts2.has(a)) agentCounts2.set(a, []); agentCounts2.get(a)!.push(i); });
-          for (const [agent, idxs] of agentCounts2) {
+          const agentCounts = new Map<string, number[]>();
+          memberAgents.forEach((a, i) => { if (!agentCounts.has(a)) agentCounts.set(a, []); agentCounts.get(a)!.push(i); });
+          for (const [agent, idxs] of agentCounts) {
             if (idxs.length > 1) {
               const names = idxs.map(i => memberNames[i]).filter(Boolean);
               if (names.length < idxs.length)
@@ -635,21 +687,40 @@ export default function (pi: ExtensionAPI) {
       }
       if (errs.length) return { content: [{ type: "text" as const, text: `Validation errors:\n${errs.map(e => `  • ${e}`).join("\n")}` }], details: { errors: errs }, isError: true };
 
-      if (existsSync(dest) && !params.overwrite) {
+      const dir  = workspaceCharterDir() ?? path.join(os.homedir(), ".config", "pi", "charters");
+      const dest = path.join(dir, `${safeName}.yaml`);
+      const isNew = !existsSync(dest);
+
+      if (!isNew && !params.overwrite) {
         return { content: [{ type: "text" as const, text: `Error: charter "${safeName}" already exists. Pass overwrite:true to replace it.` }], details: {}, isError: true };
       }
-      if (existsSync(dest)) {
+      if (!isNew) {
         writeFileSync(`${dest}.bak.${Date.now()}`, readFileSync(dest, "utf-8"), "utf-8");
       }
+
       mkdirSync(dir, { recursive: true });
       writeFileSync(dest, params.yaml_content.trimEnd() + "\n", "utf-8");
-      return { content: [{ type: "text" as const, text: `Charter "${safeName}" written to ${dest}` }], details: { path: dest, kind: kindMatch?.[1] } };
+
+      // Auto-commit to workspace repo
+      const relPath = `charters/${safeName}.yaml`;
+      const commit = commitWorkspaceFile(relPath, isNew);
+      const commitNote = commit.committed
+        ? ` (committed ${commit.hash}: ${commit.message})`
+        : commit.error ? ` (commit failed: ${commit.error})` : "";
+
+      const verb = isNew ? "written" : "updated";
+      return {
+        content: [{ type: "text" as const, text: `Charter "${safeName}" ${verb} to ${dest}${commitNote}` }],
+        details: { path: dest, kind: kindMatch?.[1], committed: commit.committed, hash: commit.hash },
+      };
     },
     renderCall(args, theme) {
       return new Text(theme.fg("toolTitle", theme.bold("charter_author ")) + theme.fg("accent", (args as any).name ?? "?"), 0, 0);
     },
     renderResult(result, _opts, theme) {
-      return new Text(result.isError ? theme.fg("error", "✗ ") + result.content[0]?.text : theme.fg("success", "✓ ") + theme.fg("muted", result.content[0]?.text ?? ""), 0, 0);
+      return new Text(result.isError
+        ? theme.fg("error", "✗ ") + result.content[0]?.text
+        : theme.fg("success", "✓ ") + theme.fg("muted", result.content[0]?.text ?? ""), 0, 0);
     },
   });
 }
