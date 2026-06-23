@@ -25,7 +25,8 @@ import { parseYaml } from "./mini-yaml.ts";
 // execution mode ignores fields it doesn't use.
 
 export interface MemberDef {
-  agent: string;           // display name; also the agent.md filename to try
+  agent: string;           // agent.md filename to load
+  name?: string;           // display name / coms-bus identity (from charter name: field)
   // Persona (chain + team)
   description?: string;    // fallback system prompt if no agent.md found
   system_prompt?: string;  // explicit inline persona (wins over description)
@@ -60,6 +61,7 @@ export interface TeamDef {
   topology?: string;
   entry_point?: string;
   members: MemberDef[];
+  protocols: string[];  // named protocol keys this team supports (loaded from ~/.config/pi/protocols/)
 }
 
 // Back-compat alias — pi-chain.ts still references StepDef in a few places.
@@ -85,11 +87,16 @@ export function legacyChainFiles(): string[] {
 
 function parseMember(m: any): MemberDef | null {
   if (!m || typeof m !== "object") return null;
-  // Support both `agent:` (new) and legacy step fields
+  // Support both `agent:` (new) and legacy step fields.
+  // When both `name:` and `agent:` are present, `agent` is the definition file
+  // and `name` is the display name / coms-bus identity (e.g. engineer-code).
   const agent = m.agent ?? m.name;
   if (!agent || typeof agent !== "string") return null;
+  // Preserve name only when it differs from agent (i.e. both fields present)
+  const name = m.agent && m.name && m.name !== m.agent ? (m.name as string) : undefined;
   return {
     agent,
+    ...(name !== undefined ? { name } : {}),
     description: m.description,
     system_prompt: m.system_prompt,
     model: m.model,
@@ -154,6 +161,13 @@ export function parseCharterBlock(
     if (members.length === 0) {
       errors.push(`team "${name}": no valid members parsed`); return;
     }
+    // protocols: list of protocol names (strings) or dict of name->overrides
+    let protocols: string[] = [];
+    if (Array.isArray(raw.protocols)) {
+      protocols = raw.protocols.filter((p: any) => typeof p === "string");
+    } else if (raw.protocols && typeof raw.protocols === "object") {
+      protocols = Object.keys(raw.protocols);
+    }
     teams.set(name, {
       name, kind: "team", description: raw.description,
       guardrail: raw.guardrail ?? "confirm",
@@ -161,6 +175,7 @@ export function parseCharterBlock(
       topology: raw.topology ?? "hub-spoke",
       entry_point: raw.entry_point,
       members,
+      protocols,
     });
   }
   // unknown kind: silently skip (forward-compat)

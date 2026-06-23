@@ -1,23 +1,14 @@
 /**
- * team-kickoff — /ag:charter command + pick_charter tool
+ * team-kickoff — /ag:charter command
  *
  * /ag:charter [task]
  *   Quick picker: shows all charters in a SelectList, alphabetically.
  *   If task arg provided, immediately queues a run after selection.
  *
- * pick_charter tool (LLM-callable)
- *   Called by the LLM after running team-planner.
- *   Receives structured recommendations and shows a sectioned SelectList:
- *     ★  recommended (up to 3, best-fit first)
- *     ✦  create new team (proposed spec)
- *        all other charters, alphabetically
- *
- * Flow for task-driven kickoff:
- *   user describes task
- *   → LLM: launch_agent(team-planner, task)
- *   → LLM: pick_charter(task, recommended, proposed)
- *   → user picks in SelectList
- *   → LLM: run_charter(charter, task)  OR  team-builder for new team
+ * To design a new charter from a task description, use the charter-builder-chain:
+ *   run_chain("charter-builder-chain", "<task description>")
+ *   → charter-planner reads catalog and outputs a JSON spec
+ *   → charter-builder writes the YAML file
  */
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -25,8 +16,8 @@ import { join } from "node:path";
 import * as os from "node:os";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder } from "@earendil-works/pi-coding-agent";
-import { Container, Input, type SelectItem, SelectList, Spacer, Text } from "@earendil-works/pi-tui";
-import { Type } from "typebox";
+import { Container, Input, SelectList, Spacer, Text } from "@earendil-works/pi-tui";
+
 
 // ─── Charter loader ───────────────────────────────────────────────────────────
 
@@ -193,122 +184,6 @@ async function showTaskInput(
 // ─── Extension ────────────────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
-
-  // ── pick_charter tool ─────────────────────────────────────────────────────────
-  // LLM calls this after running team-planner with structured results.
-
-  pi.registerTool({
-    name: "pick_charter",
-    label: "Pick Team",
-    description:
-      "Show an interactive team picker after running team-planner. " +
-      "Pass the structured recommendations from team-planner output. " +
-      "Returns the selected charter name or a signal to build a new team.",
-    promptSnippet: "Show a team selection UI after analyzing a task with team-planner",
-    parameters: Type.Object({
-      task: Type.String({ description: "The research task" }),
-      recommended: Type.Array(
-        Type.Object({
-          charter:  Type.String({ description: "Existing charter name" }),
-          fit:      Type.String({ description: "Why this charter fits" }),
-          gap:      Type.Optional(Type.Union([Type.String(), Type.Null()])),
-        }),
-        { description: "Up to 3 recommended existing charters, best-fit first" },
-      ),
-      proposed: Type.Optional(
-        Type.Union([
-          Type.Object({
-            name: Type.String({ description: "Proposed charter name" }),
-            why:  Type.String({ description: "Why a new team is needed" }),
-            members: Type.Array(
-              Type.Object({
-                agent:       Type.String(),
-                name:        Type.Optional(Type.String()),
-                role:        Type.String(),
-                context:     Type.Optional(Type.String()),
-                context_dir: Type.Optional(Type.String()),
-              }),
-            ),
-          }),
-          Type.Null(),
-        ]),
-      ),
-    }),
-
-    async execute(_id, params, _signal, _onUpdate, ctx) {
-      const allCharters  = loadCharters();
-      const recNames     = new Set(params.recommended.map((r) => r.charter));
-      const items: SelectItem[] = [];
-
-      // Section: recommended
-      if (params.recommended.length > 0) {
-        for (const rec of params.recommended.slice(0, 3)) {
-          const gap = rec.gap && rec.gap !== "none" && rec.gap !== "null"
-            ? `  ·  gap: ${rec.gap}` : "";
-          items.push({
-            value:       `existing:${rec.charter}`,
-            label:       `★  ${rec.charter}`,
-            description: rec.fit + gap,
-          });
-        }
-        // Visual separator (non-actionable — onSelect will skip __-prefixed values)
-        items.push({ value: "__sep1__", label: "─".repeat(40), description: "" });
-      }
-
-      // Option: create new team
-      if (params.proposed) {
-        items.push({
-          value:       "new",
-          label:       "✦  Create new team",
-          description: `${params.proposed.name}  ·  ${params.proposed.why}`,
-        });
-        items.push({ value: "__sep2__", label: "─".repeat(40), description: "" });
-      }
-
-      // Section: all other charters
-      for (const c of allCharters.filter((c) => !recNames.has(c.name))) {
-        items.push({ value: `existing:${c.name}`, label: `   ${c.name}`, description: c.description });
-      }
-
-      const result = await showPicker(ctx, items, "Select a team", params.task);
-
-      if (!result) {
-        return { content: [{ type: "text" as const, text: "Team picker cancelled." }], details: {} };
-      }
-
-      if (result === "new" && params.proposed) {
-        // Build a human-readable YAML preview of the proposed members for team-builder
-        const memberLines = params.proposed.members.map((m) => {
-          const lines = [`  - agent: ${m.agent}`];
-          if (m.name)        lines.push(`    name: ${m.name}`);
-          lines.push(`    role: ${m.role}`);
-          if (m.context)     lines.push(`    context: "${m.context}"`);
-          if (m.context_dir) lines.push(`    context_dir: ${m.context_dir}`);
-          if (m.role !== "coordinator") lines.push(`    reports_to: coordinator`);
-          return lines.join("\n");
-        }).join("\n");
-
-        return {
-          content: [{ type: "text" as const, text:
-            `User chose to create a new team.\n\n` +
-            `Charter name: ${params.proposed.name}\n` +
-            `Why: ${params.proposed.why}\n\n` +
-            `Proposed members:\n${memberLines}\n\n` +
-            `Run team-builder with this spec. Show the user the charter YAML before writing it.`,
-          }],
-          details: { action: "new", proposed: params.proposed },
-        };
-      }
-
-      const charter = result.replace("existing:", "");
-      return {
-        content: [{ type: "text" as const, text:
-          `User selected "${charter}". Call run_charter("${charter}", task) to run it.`,
-        }],
-        details: { action: "run", charter },
-      };
-    },
-  });
 
   // ── /ag:charter command ─────────────────────────────────────────────────────
   // Quick catalog picker — no LLM analysis, just browse and pick.

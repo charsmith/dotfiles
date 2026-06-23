@@ -134,6 +134,7 @@ interface AgentEntry {
   // Set for blocking agents — resolves the launch_agent tool's execute() promise.
   watcher?: FSWatcher;           // fs.watch on the state file for instant usage updates
   resolve?: (result: ToolResultLike) => void;
+  sessionFile?: string | null;   // captured from child state file before teardown
 }
 
 interface ToolResultLike {
@@ -483,6 +484,31 @@ export default function (pi: ExtensionAPI) {
 
   // ── State file polling + followUp delivery ───────────────────────────────
 
+  // On first sight of a session file for a team member, patch it into the manifest
+  // immediately — so it's recorded even if the agent is killed before the run completes.
+  function recordSessionFile(agent: AgentEntry, sessionFile: string) {
+    if (agent.sessionFile === sessionFile) return; // already recorded
+    agent.sessionFile = sessionFile;
+    if (!agent.teamProject) return;
+    // Locate the coordinator for this team to find the manifest path.
+    for (const [, coord] of agents) {
+      if (coord.isCoordinator && coord.teamProject === agent.teamProject && coord.workDir) {
+        const manifestPath = path.join(coord.workDir, "session", "manifest.json");
+        if (existsSync(manifestPath)) {
+          try {
+            const mf = JSON.parse(readFileSync(manifestPath, "utf-8"));
+            const member = (mf.members as any[])?.find((m: any) => m.cname === agent.name);
+            if (member && member.session_file !== sessionFile) {
+              member.session_file = sessionFile;
+              writeFileSync(manifestPath, JSON.stringify(mf, null, 2), "utf-8");
+            }
+          } catch {}
+        }
+        break;
+      }
+    }
+  }
+
   function pollAgentState(agent: AgentEntry) {
     // Keep windowTarget fresh from the stable pane id — the index may have
     // shifted since launch as other windows came and went.
@@ -502,6 +528,8 @@ export default function (pi: ExtensionAPI) {
         if (state.usage)  agent.usage = state.usage;
         if (state.model)  agent.model = shortModelName(state.model);
       }
+      // Record session file on first sight — before any possible teardown.
+      if ((state as any).sessionFile) recordSessionFile(agent, (state as any).sessionFile);
 
       // Resumed after a pause (e.g. answered in the child window) — close any
       // dangling parent dialog, then clear the stopped flag.
@@ -579,13 +607,21 @@ export default function (pi: ExtensionAPI) {
         // Collect usage across all team members before teardown, then write info.md.
         if (agent.workDir) {
           try {
-            const rows: { name: string; model: string | undefined; usage: AgentUsage | undefined }[] = [
-              { name: agent.name, model: agent.model, usage: state.usage ?? agent.usage },
+            type RowEntry = { name: string; model: string | undefined; usage: AgentUsage | undefined; sessionFile: string | null; paneId: string | null; stateFile: string | null };
+            const rows: RowEntry[] = [
+              { name: agent.name, model: agent.model, usage: state.usage ?? agent.usage, sessionFile: (state as any).sessionFile ?? agent.sessionFile ?? null, paneId: agent.paneId ?? null, stateFile: agent.stateFile ?? null },
             ];
             if (agent.teamProject) {
               for (const [, member] of agents) {
                 if (member !== agent && member.teamProject === agent.teamProject) {
-                  rows.push({ name: member.name, model: member.model, usage: member.usage });
+                  // For persistent workers, sessionFile may not be stashed on the entry yet
+                  // (they write "idle" not "done", bypassing the tick-loop capture). Read it
+                  // directly from their still-live state file as a fallback.
+                  let memberSessionFile = member.sessionFile ?? null;
+                  if (!memberSessionFile && existsSync(member.stateFile)) {
+                    try { memberSessionFile = (JSON.parse(readFileSync(member.stateFile, "utf-8")) as any).sessionFile ?? null; } catch {}
+                  }
+                  rows.push({ name: member.name, model: member.model, usage: member.usage, sessionFile: memberSessionFile, paneId: member.paneId ?? null, stateFile: member.stateFile ?? null });
                 }
               }
             }
@@ -618,16 +654,24 @@ export default function (pi: ExtensionAPI) {
               tableRows,
               `| **Total** | | **${totals.turns}** | **${fmtTokens(totals.input)}** | **${fmtTokens(totals.output)}** | **$${totals.cost.toFixed(3)}** |`,
             ].join("\n");
-            writeFileSync(path.join(agent.workDir, "info.md"), info, "utf-8");
+            writeFileSync(path.join(agent.workDir, "session", "info.md"), info, "utf-8");
             // Update manifest.json with completion info (for retrospective + meta-system)
-            const manifestPath = path.join(agent.workDir, "manifest.json");
+            const manifestPath = path.join(agent.workDir, "session", "manifest.json");
             if (existsSync(manifestPath)) {
               const mf = JSON.parse(readFileSync(manifestPath, "utf-8"));
               mf.completed = new Date().toISOString();
               mf.outcome = "success";
               mf.usage = {
                 total_cost: totals.cost,
-                per_agent: rows.map(r => ({ agent: r.name, model: r.model ?? null, usage: r.usage ?? null })),
+                per_agent: rows.map(r => ({
+                  agent: r.name,
+                  cname: r.name,   // r.name IS the display name now (member.name ?? member.agent)
+                  model: r.model ?? null,
+                  usage: r.usage ?? null,
+                  pane_id: r.paneId,
+                  state_file: r.stateFile,
+                  session_file: r.sessionFile,
+                })),
               };
               writeFileSync(manifestPath, JSON.stringify(mf, null, 2), "utf-8");
             }
@@ -668,6 +712,7 @@ export default function (pi: ExtensionAPI) {
         agent.status = state.status;
         agent.model  = state.model ? shortModelName(state.model) : agent.model;
         agent.usage  = state.usage;
+        agent.sessionFile = (state as any).sessionFile ?? null;  // capture before stateFile is deleted
         // Chain steps own their own cleanup — the chain runner reads the output
         // and deletes the state file itself. If we call finishAgent here we race
         // and delete the state file before the chain runner can read it.
@@ -687,6 +732,7 @@ export default function (pi: ExtensionAPI) {
           output = s.output;
           agent.model = s.model ? shortModelName(s.model) : agent.model;
           agent.usage = s.usage;
+          agent.sessionFile = (s as any).sessionFile ?? null;  // capture before stateFile is deleted
         } catch {}
       }
       finishAgent(agent, output, false);
@@ -900,6 +946,7 @@ export default function (pi: ExtensionAPI) {
     systemPrompt?: string;
     coordinator?: boolean;
     workDir?: string;
+    comsLogDir?: string;   // session/ dir for coms.jsonl — set for all team members
     budget?: number;
     model?: string;
   }, ctx: ExtensionContext): { id: string; windowTarget: string; safeName: string } {
@@ -911,6 +958,12 @@ export default function (pi: ExtensionAPI) {
     const purpose = (opts.agentDef?.description || opts.systemPrompt || "").replace(/[\r\n\t]+/g, " ").trim().slice(0, 100);
     if (purpose) extraEnv.PI_COMS_PURPOSE = purpose;
     if (process.env.PI_COMS_BUS_DIR) extraEnv.PI_COMS_BUS_DIR = process.env.PI_COMS_BUS_DIR;
+    // All team members get the session dir for coms.jsonl logging and protocol discovery.
+    if (opts.comsLogDir) {
+      extraEnv.PI_COMS_LOG_DIR = opts.comsLogDir;
+      const pfile = path.join(opts.comsLogDir, "protocols.json");
+      if (existsSync(pfile)) extraEnv.PI_COMS_PROTOCOLS_FILE = pfile;
+    }
     if (opts.coordinator) {
       extraEnv.PI_COORDINATOR = "1";
       if (opts.workDir) extraEnv.PI_WORK_DIR = opts.workDir;
@@ -1007,7 +1060,9 @@ export default function (pi: ExtensionAPI) {
 
     // ── Work directory ────────────────────────────────────────────────────────
     const workDir = path.join(agentTeamsWorkdir(), def.name, makeUnitOfWorkId(input));
+    const chainSessionDir = path.join(workDir, "session");
     mkdirSync(workDir, { recursive: true });
+    mkdirSync(chainSessionDir, { recursive: true });
     writeFileSync(path.join(workDir, "input.md"), input, "utf-8");
     const runStarted = new Date().toISOString();
     const manifest: Record<string, unknown> = {
@@ -1019,7 +1074,7 @@ export default function (pi: ExtensionAPI) {
       })),
       completed: null, outcome: null, cost: null,
     };
-    writeFileSync(path.join(workDir, "manifest.json"), JSON.stringify(manifest, null, 2), "utf-8");
+    writeFileSync(path.join(chainSessionDir, "manifest.json"), JSON.stringify(manifest, null, 2), "utf-8");
 
     for (let i = 0; i < def.members.length; i++) {
       const member = def.members[i];
@@ -1104,7 +1159,7 @@ ${stepOutput.output}` }], details: { chain: def.name } };
       const steps = manifest.steps as Array<Record<string, unknown>>;
       if (steps[i]) { steps[i].status = stepOutput.isError ? "error" : "done"; steps[i].output = stepOutput.output.slice(0, 500); }
       manifest.cost = totalCost;
-      writeFileSync(path.join(workDir, "manifest.json"), JSON.stringify(manifest, null, 2), "utf-8");
+      writeFileSync(path.join(chainSessionDir, "manifest.json"), JSON.stringify(manifest, null, 2), "utf-8");
       onUpdate?.({ content: [{ type: "text", text: `Chain "${def.name}" step ${i + 1}/${def.members.length} done. $${totalCost.toFixed(3)}/$${budget.toFixed(2)}` }] });
     }
 
@@ -1114,8 +1169,8 @@ ${stepOutput.output}` }], details: { chain: def.name } };
     manifest.completed = new Date().toISOString();
     manifest.outcome   = "completed";
     manifest.cost      = totalCost;
-    writeFileSync(path.join(workDir, "manifest.json"), JSON.stringify(manifest, null, 2), "utf-8");
-    writeFileSync(path.join(workDir, "info.md"), [
+    writeFileSync(path.join(chainSessionDir, "manifest.json"), JSON.stringify(manifest, null, 2), "utf-8");
+    writeFileSync(path.join(chainSessionDir, "info.md"), [
       `# ${def.name}  —  chain run`,
       ``,
       `| Field   | Value |`,
@@ -1188,29 +1243,52 @@ ${stepOutput.output}` }], details: { chain: def.name } };
       const workdir  = agentTeamsWorkdir();
       const unitId   = makeUnitOfWorkId(params.input);
       const workDir  = path.join(workdir, name, unitId);
+      const sessionDir = path.join(workDir, "session");
       mkdirSync(workDir, { recursive: true });
+      mkdirSync(sessionDir, { recursive: true });
       writeFileSync(path.join(workDir, "input.md"), params.input, "utf-8");
+
+      // ── Load + snapshot team protocols ────────────────────────────────────────────
+      // Resolve protocol JSON files from ~/.config/pi/protocols/<name>.json
+      // and write a session snapshot so all members can discover them via
+      // PI_COMS_PROTOCOLS_FILE without needing to know the protocols dir.
+      const protocolsDir = path.join(os.homedir(), ".config", "pi", "protocols");
+      const loadedProtocols: Record<string, unknown> = {};
+      for (const pname of (teamDef.protocols ?? [])) {
+        const pfile = path.join(protocolsDir, `${pname}.json`);
+        try {
+          loadedProtocols[pname] = JSON.parse(readFileSync(pfile, "utf-8"));
+        } catch {
+          // Protocol file missing — include a stub so members know it was listed
+          loadedProtocols[pname] = { name: pname, description: `(protocol file not found: ${pfile})`, schema: null };
+        }
+      }
+      const protocolsFile = path.join(sessionDir, "protocols.json");
+      writeFileSync(protocolsFile, JSON.stringify(loadedProtocols, null, 2), "utf-8");
 
       // ── Run manifest (start) ─────────────────────────────────────────────
       // Machine-readable record of the team run — foundation for retrospective
-      // and meta-system. Updated at completion in pollAgentState.
+      // and meta-system. Lives in session/ alongside other run artifacts.
+      // input.md and output.md stay at the workDir root for easy access.
       const runStarted = new Date().toISOString();
       const startManifest = {
         charter: name, kind: "team" as const, run_id: unitId,
         task: params.input, workDir, started: runStarted, budget,
         members: teamDef.members.map(m => ({
-          agent: m.agent, role: m.role ?? "specialist", model: m.model ?? null,
+          agent: m.agent,
+          cname: m.name ?? m.agent,   // coms-bus display name (from charter name: field)
+          role: m.role ?? "specialist", model: m.model ?? null,
         })),
         completed: null as string | null,
         outcome: null as string | null,
         usage: null as unknown,
       };
-      writeFileSync(path.join(workDir, "manifest.json"), JSON.stringify(startManifest, null, 2), "utf-8");
+      writeFileSync(path.join(sessionDir, "manifest.json"), JSON.stringify(startManifest, null, 2), "utf-8");
 
       // ── Shared blackboard (stub) ─────────────────────────────────────────
       // Coordinator writes task graph, status updates, and claim notes here.
       // Specialists can read for context. Ephemeral (per-run, not persistent KB).
-      writeFileSync(path.join(workDir, "blackboard.md"), [
+      writeFileSync(path.join(sessionDir, "blackboard.md"), [
         `# Team Blackboard`,
         ``,
         `Charter: ${name}  |  Run: ${unitId}`,
@@ -1229,7 +1307,7 @@ ${stepOutput.output}` }], details: { chain: def.name } };
       // ── Task ledger (stub) ─────────────────────────────────────────────────
       // Coordinator reads/writes this to track what's pending/in-progress/done.
       // Machine-readable; also the source of truth for credit assignment in retro.
-      writeFileSync(path.join(workDir, "task-ledger.json"), JSON.stringify({
+      writeFileSync(path.join(sessionDir, "task-ledger.json"), JSON.stringify({
         run_id: unitId, task: params.input, started: runStarted, subtasks: [],
       }, null, 2), "utf-8");
 
@@ -1263,8 +1341,8 @@ ${stepOutput.output}` }], details: { chain: def.name } };
                 ``,
                 `Steps:`,
                 `1. Read your task from: ${workDir}/input.md`,
-                `2. Decompose into subtasks — write your task graph to: ${workDir}/blackboard.md`,
-                `3. Write the initial subtask list to: ${workDir}/task-ledger.json`,
+                `2. Decompose into subtasks — write your task graph to: ${workDir}/session/blackboard.md`,
+                `3. Write the initial subtask list to: ${workDir}/session/task-ledger.json`,
                 `4. For each subtask: spawn a domain-appropriate specialist via launch_agent (mode: "blocking")`,
                 `   Use a domain-specific system_prompt for each specialist's area of expertise`,
                 `   Request structured findings: Claims / Evidence+Source / Confidence / Open Questions`,
@@ -1284,11 +1362,26 @@ ${stepOutput.output}` }], details: { chain: def.name } };
               `Steps:`,
               `1. Use coms_list to see available team members`,
               `2. Read your task from: ${workDir}/input.md`,
-              `3. Decompose the task — write your task graph to: ${workDir}/blackboard.md`,
+              `3. Decompose the task — write your task graph to: ${workDir}/session/blackboard.md`,
               `4. Delegate subtasks via coms_send — replies arrive automatically as your next turn, do NOT poll`,
-              `5. Update task-ledger.json at: ${workDir}/task-ledger.json as subtasks complete`,
+              `5. Update task-ledger.json at: ${workDir}/session/task-ledger.json as subtasks complete`,
               `6. Synthesize all findings`,
-              `7. Use the write tool to write your complete report to: ${workDir}/output.md`,
+              `7. Before writing output.md: mark all subtasks done in task-ledger.json, and append a ## Done section to blackboard.md`,
+              `8. Use the write tool to write your complete report to: ${workDir}/output.md`,
+              ``,
+              `EVIDENCE REQUIREMENT: When writing output.md, preserve ALL source citations from specialist findings.`,
+              `Code citations must include: absolute file path, line number, AND full github.netflix.net URL with /blob/<branch>/<file>#L<line>.`,
+              `Doc citations must include: full Manuals or Google Docs URL. Do NOT strip or paraphrase citations during synthesis.`,
+              ``,
+              `PROTOCOLS: Run coms_protocols() to see what structured response formats this team supports.`,
+              `When dispatching tasks that produce structured output (e.g. research findings, synthesis, critique),`,
+              `pass protocol: "<name>" to coms_send — the specialist will know the expected response shape.`,
+              `For open-ended discussion or questions without a fixed format, omit protocol (ad-hoc plain text).`,
+              ``,
+              `ROUTING: All messages to teammates must go via coms_send with an explicit target name.`,
+              `Do NOT use coms_broadcast — always address each teammate individually by name.`,
+              `Your plain text output goes only to the user, not to teammates.`,
+              `Do NOT write routing thoughts or follow-up questions as plain text — send them via coms_send only.`,
               ``,
               `CRITICAL: You MUST use the write tool to create output.md at the path above.`,
               `Do NOT write the report as plain chat text — it must be a file on disk.`,
@@ -1301,15 +1394,21 @@ ${stepOutput.output}` }], details: { chain: def.name } };
             (member.description ? `Your role: ${member.description}` : ""),
             ...(member.context ? [`\n${member.context}`] : []),
             ...(member.context_dir ? [`\nYour working directory for this role: ${member.context_dir}`] : []),
+            `\n\nREPLY PROTOCOL: When the coordinator sends you a task via coms, respond by writing your answer as plain text — it is automatically sent back. Do NOT call coms_send to reply to the coordinator; that opens a new thread and breaks correlation. Only use coms_send if you need to ask a question to ANOTHER teammate (not the coordinator).`,
+            `\nPROTOCOL DISCOVERY: Run coms_protocols() to see what structured response formats this team uses. If the coordinator\'s task specifies a protocol name, run coms_protocol_describe("<name>") to see the exact JSON schema you must return. For ad-hoc tasks with no protocol specified, plain text is fine.`,
             ].join("");
+          // Use charter member.name (display name) when present — this is how
+          // engineer-code/engineer-catalog/engineer-docs get distinct coms-bus
+          // identities even when they share the same agent type.
           launchTeamMember({
-            name: member.agent,
+            name: member.name ?? member.agent,
             task: memberTask,
             team: project,
             agentDef,
             systemPrompt: inlinePrompt,
             coordinator: isCoord,
             workDir: isCoord ? workDir : undefined,
+            comsLogDir: sessionDir,
             budget: isCoord ? budget : undefined,
             model: member.model,
           }, ctx);
@@ -1323,7 +1422,8 @@ ${stepOutput.output}` }], details: { chain: def.name } };
       const memberList = teamDef.members
         .map(m => {
           const hasdef = !!loadAgentDef(m.agent);
-          return m.agent + (m.agent === coordName ? " [coordinator]" : "") + (hasdef ? "" : " [⚠ no agent.md]");
+          const label = m.name ? `${m.name}(${m.agent})` : m.agent;
+          return label + (m.agent === coordName ? " [coordinator]" : "") + (hasdef ? "" : " [⚠ no agent.md]");
         }).join(", ");
       const warnLine = warnings.length ? `\nWarnings: ${warnings.join("; ")}` : "";
       return {

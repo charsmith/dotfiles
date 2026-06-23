@@ -134,8 +134,14 @@ function parseSimpleYaml(src: string): Record<string, any> {
 
     if (indent === 0) {
       flush();
-      const m = line.match(/^(\w[\w-]*)\s*:/);
-      if (m) { currentKey = m[1]; currentObj = {}; }
+      const m = line.match(/^(\w[\w-]*)\s*:\s*(.*)/);
+      if (m) {
+        currentKey = m[1];
+        const inlineVal = m[2].replace(/^["']|["']$/g, "").trim();
+        // If there's an inline scalar value, store it directly; otherwise start a block
+        if (inlineVal) { root[m[1]] = inlineVal; currentKey = null; currentObj = null; }
+        else { currentObj = {}; }
+      }
       continue;
     }
 
@@ -176,7 +182,8 @@ function ingestCharterBlock(name: string, raw: any, seenChains: Set<string>, see
   if (!raw || typeof raw !== "object") return;
   if (raw.kind === "chain" && !seenChains.has(name)) {
     seenChains.add(name);
-    chains.push({ name, description: raw.description, steps: Array.isArray(raw.steps) ? raw.steps.length : 0, persist: raw.persist === "true" || raw.persist === true });
+    const stepList = Array.isArray(raw.steps) ? raw.steps : Array.isArray(raw.members) ? raw.members : [];
+    chains.push({ name, description: raw.description, steps: stepList.length, persist: raw.persist === "true" || raw.persist === true });
   } else if (raw.kind === "team" && !seenTeams.has(name)) {
     seenTeams.add(name);
     const members = Array.isArray(raw.members)
@@ -331,27 +338,41 @@ export default function (pi: ExtensionAPI) {
       // Check teams first
       const team = teams.find(t => t.name === n);
       if (team) {
-        // Read raw YAML block from file
-        for (const file of CHAIN_FILES) {
-          if (!existsSync(file)) continue;
-          const raw = readFileSync(file, "utf-8");
-          // Find the block starting with the name
-          const blockMatch = raw.match(new RegExp(`(^${n}:\\s*\\n(?:[ \\t]+.*\\n?)*)`, "m"));
-          if (blockMatch) return { content: [{ type: "text" as const, text: `# Team: ${n}\n\n\`\`\`yaml\n${blockMatch[1].trimEnd()}\n\`\`\`` }], details: { kind: "team" } };
+        // Charter lives as its own file under CHARTER_DIRS
+        for (const dir of CHARTER_DIRS) {
+          for (const ext of [".yaml", ".yml"]) {
+            const file = path.join(dir, `${n}${ext}`);
+            if (!existsSync(file)) continue;
+            try {
+              const raw = readFileSync(file, "utf-8").trim();
+              return { content: [{ type: "text" as const, text: `# Team: ${n}\n\n\`\`\`yaml\n${raw}\n\`\`\`` }], details: { kind: "team", path: file } };
+            } catch { /* try next */ }
+          }
         }
-        return { content: [{ type: "text" as const, text: `Team "${n}" found in catalog but YAML block could not be extracted.` }], details: { kind: "team" } };
+        return { content: [{ type: "text" as const, text: `Team "${n}" found in catalog but charter file could not be read.` }], details: { kind: "team" } };
       }
 
-      // Check chains
+      // Check chains (individual charter files first, then legacy monolithic file)
       const chain = chains.find(c => c.name === n);
       if (chain) {
-        for (const file of CHAIN_FILES) {
+        for (const dir of CHARTER_DIRS) {
+          for (const ext of [".yaml", ".yml"]) {
+            const file = path.join(dir, `${n}${ext}`);
+            if (!existsSync(file)) continue;
+            try {
+              const raw = readFileSync(file, "utf-8").trim();
+              return { content: [{ type: "text" as const, text: `# Chain: ${n}\n\n\`\`\`yaml\n${raw}\n\`\`\`` }], details: { kind: "chain", path: file } };
+            } catch { /* try next */ }
+          }
+        }
+        // Fall back to legacy monolithic agent-chain.yaml
+        for (const file of LEGACY_CHAIN_FILES) {
           if (!existsSync(file)) continue;
           const raw = readFileSync(file, "utf-8");
           const blockMatch = raw.match(new RegExp(`(^${n}:\\s*\\n(?:[ \\t]+.*\\n?)*)`, "m"));
           if (blockMatch) return { content: [{ type: "text" as const, text: `# Chain: ${n}\n\n\`\`\`yaml\n${blockMatch[1].trimEnd()}\n\`\`\`` }], details: { kind: "chain" } };
         }
-        return { content: [{ type: "text" as const, text: `Chain "${n}" found in catalog but YAML block could not be extracted.` }], details: { kind: "chain" } };
+        return { content: [{ type: "text" as const, text: `Chain "${n}" found in catalog but charter file could not be read.` }], details: { kind: "chain" } };
       }
 
       // Check agents
@@ -419,6 +440,20 @@ export default function (pi: ExtensionAPI) {
           if (!Array.isArray(raw.members) || raw.members.length === 0) errs.push(`team "${name}": missing or empty members`);
           if (raw.entry_point && !raw.members?.some((m: any) => m.agent === raw.entry_point))
             errs.push(`team "${name}": entry_point "${raw.entry_point}" not in members`);
+          // Duplicate agent types without distinct name: fields cause a coms-bus
+          // race condition where two agents register with the same inbox name.
+          const agentCounts = new Map<string, number>();
+          for (const m of (raw.members ?? [])) if (m.agent) agentCounts.set(m.agent, (agentCounts.get(m.agent) ?? 0) + 1);
+          for (const [agent, count] of agentCounts) {
+            if (count > 1) {
+              const instances = (raw.members ?? []).filter((m: any) => m.agent === agent);
+              const names = instances.map((m: any) => m.name).filter(Boolean);
+              if (names.length < count)
+                errs.push(`team "${name}": ${count} members use agent "${agent}" but not all have a distinct name: field — add name: to each to prevent coms-bus routing collisions`);
+              else if (new Set(names).size < names.length)
+                errs.push(`team "${name}": duplicate name: values among members using agent "${agent}" — each must be unique`);
+            }
+          }
         } else {
           errs.push(`"${name}": unknown kind "${raw.kind}"`);
         }
@@ -570,9 +605,30 @@ export default function (pi: ExtensionAPI) {
       else {
         const kind = kindMatch[1];
         if (kind === "chain") {
-          if (!/steps:/m.test(params.yaml_content)) errs.push("kind:chain requires a 'steps' list");
+          if (!/steps:/m.test(params.yaml_content) && !/members:/m.test(params.yaml_content)) errs.push("kind:chain requires a 'steps' or 'members' list");
         } else if (kind === "team") {
           if (!/members:/m.test(params.yaml_content)) errs.push("kind:team requires a 'members' list");
+          // Duplicate agent types without distinct name: fields — parse members
+          // to check. Uses a simple regex scan since full YAML parsing isn't available here.
+          const memberBlocks = params.yaml_content.split(/\n  - /g).slice(1);
+          const memberAgents: string[] = [];
+          const memberNames: string[] = [];
+          for (const block of memberBlocks) {
+            const agentM = block.match(/^agent:\s*(\S+)/);
+            const nameM  = block.match(/\bname:\s*(\S+)/);
+            if (agentM) { memberAgents.push(agentM[1]); memberNames.push(nameM?.[1] ?? ""); }
+          }
+          const agentCounts2 = new Map<string, number[]>();
+          memberAgents.forEach((a, i) => { if (!agentCounts2.has(a)) agentCounts2.set(a, []); agentCounts2.get(a)!.push(i); });
+          for (const [agent, idxs] of agentCounts2) {
+            if (idxs.length > 1) {
+              const names = idxs.map(i => memberNames[i]).filter(Boolean);
+              if (names.length < idxs.length)
+                errs.push(`${idxs.length} members use agent "${agent}" — add a distinct name: field to each to prevent coms-bus routing collisions`);
+              else if (new Set(names).size < names.length)
+                errs.push(`duplicate name: values among members using agent "${agent}" — each must be unique`);
+            }
+          }
         } else {
           errs.push(`Unknown kind: "${kind}". Use 'chain' or 'team'.`);
         }

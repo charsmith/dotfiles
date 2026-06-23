@@ -57,7 +57,11 @@ import * as path from "node:path";
 // ━━ Constants ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 const BUS_DIR = process.env.PI_COMS_BUS_DIR || path.join(os.homedir(), ".pi", "coms-bus");
+const COMS_LOG_DIR = process.env.PI_COMS_LOG_DIR || "";
+const COMS_PROTOCOLS_FILE = process.env.PI_COMS_PROTOCOLS_FILE || "";
 const MAX_HOPS = Number(process.env.PI_COMS_BUS_MAX_HOPS) || 5;
+
+const PROTOCOL_TOOLS = ["coms_protocols", "coms_protocol_describe"];
 const HEARTBEAT_MS = Number(process.env.PI_COMS_BUS_HEARTBEAT_MS) || 10_000;
 const STALE_MS = Number(process.env.PI_COMS_BUS_STALE_MS) || 30_000;
 const TICK_MS = 1_000;
@@ -144,6 +148,21 @@ interface Pending {
 // ━━ Small utilities ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 function nowIso(): string { return new Date().toISOString(); }
+
+// Append one JSON line to session/coms.jsonl when PI_COMS_LOG_DIR is set.
+// Multiple processes write to the same file; each line is atomic enough at
+// typical message rates (one JSON object + newline, written with appendFileSync).
+function logComs(record: Record<string, unknown>): void {
+  if (!COMS_LOG_DIR) return;
+  try {
+    const { appendFileSync } = require("node:fs") as typeof import("node:fs");
+    appendFileSync(
+      path.join(COMS_LOG_DIR, "coms.jsonl"),
+      JSON.stringify({ ts: nowIso(), ...record }) + "\n",
+      { encoding: "utf-8" },
+    );
+  } catch { /* best-effort — never block the bus */ }
+}
 
 // Monotonic-ish id: timestamp (sortable) + random suffix. Used for msg ids and
 // inbox filenames so per-message files sort FIFO.
@@ -304,9 +323,8 @@ function claimInbox(id: Identity): Message[] {
     catch { try { unlinkSync(fp); } catch { /* ignore */ } continue; }
     if (msg.kind === "prompt") {
       const inflight = `${fp}.inflight`;
-      try { renameSync(fp, inflight); inflightFiles.set(msg.msg_id, inflight); }
-      catch { try { unlinkSync(fp); } catch { /* ignore */ } }
-      msgs.push(msg);
+      try { renameSync(fp, inflight); inflightFiles.set(msg.msg_id, inflight); msgs.push(msg); }
+      catch { try { unlinkSync(fp); } catch { /* ignore */ } } // claim failed — concurrent call got it
     } else {
       msgs.push(msg);
       try { unlinkSync(fp); } catch { /* ignore */ }
@@ -378,8 +396,22 @@ export default function (pi: ExtensionAPI) {
     );
   }
 
-  const COMS_TOOLS = ["coms_list", "coms_send", "coms_broadcast", "coms_poll", "coms_shutdown"];
+  const COMS_TOOLS = ["coms_list", "coms_send", "coms_broadcast", "coms_poll", "coms_shutdown", "coms_protocols", "coms_protocol_describe"];
   let joined = false;
+
+  // ── Protocol helpers ─────────────────────────────────────────────────────
+  function readProtocols(): Record<string, any> {
+    if (!COMS_PROTOCOLS_FILE) return {};
+    try { return JSON.parse(readFileSync(COMS_PROTOCOLS_FILE, "utf-8")); }
+    catch { return {}; }
+  }
+
+  function resolveProtocolSchema(name: string): object | null {
+    const protos = readProtocols();
+    const p = protos[name];
+    if (!p) return null;
+    return (p as any).schema ?? null;
+  }
 
   let identity: Identity | null = null;
   let latestCtx: ExtensionContext | null = null;
@@ -509,6 +541,8 @@ export default function (pi: ExtensionAPI) {
         details: { msg_id: next.msg_id, from: next.from_name },
       }, { deliverAs: "followUp", triggerTurn: true });
       pi.appendEntry("coms-bus-log", { event: "inbound_prompt", msg_id: next.msg_id, from: next.from_name, hops: next.hops });
+      logComs({ event: "receive", from: next.from_name, to: identity?.name, msg_id: next.msg_id, hops: next.hops,
+        preview: body.slice(0, 300).replace(/\n/g, " ") });
     } catch {
       // pi is still processing (e.g. the warmup turn at startup races recovery,
       // or a human turn is mid-flight). Our `busy` flag can lag pi's real state,
@@ -541,9 +575,14 @@ export default function (pi: ExtensionAPI) {
     // Sends are async — always surface the answer as a follow-up so the
     // orchestrator processes it in a fresh turn (deadlock-free).
     const tag = p.group_id ? ` (broadcast ${p.group_id})` : "";
+    // Mirror of the replyNote in serviceNextInbound: specialists are told
+    // "just write your reply." Coordinators need the opposite nudge — when an
+    // answer arrives, plain text output goes only to the user; routing
+    // follow-up questions to teammates requires coms_send.
+    const routingNote = `\n\n(To ask ${msg.from_name} follow-up questions: coms_send(target: "${msg.from_name}", prompt: "..."). For other teammates use their name as the target. Plain text output goes only to the user — it does not reach teammates.)`;
     const bodyText = msg.error
       ? `[coms · ERROR from ${msg.from_name}${tag}] ${msg.error}`
-      : `[coms · answer from ${msg.from_name}${tag}]\n\n${typeof msg.response === "string" ? msg.response : JSON.stringify(msg.response, null, 2)}`;
+      : `[coms · answer from ${msg.from_name}${tag}]\n\n${typeof msg.response === "string" ? msg.response : JSON.stringify(msg.response, null, 2)}${routingNote}`;
     try {
       pi.sendMessage({
         customType: "coms-response",
@@ -656,17 +695,28 @@ export default function (pi: ExtensionAPI) {
       "automatically.) Returns a msg_id immediately and the answer arrives later as a " +
       "follow-up message (always async — it never blocks). " +
       "IMPORTANT: do NOT poll in a loop with sleep — the reply triggers a new turn automatically. " +
-      "Just call coms_send and stop; your next turn will contain the answer.",
+      "Just call coms_send and stop; your next turn will contain the answer. " +
+      "Pass protocol: \"<name>\" to request a structured response matching a named protocol schema (see coms_protocols). " +
+      "Omit both protocol and response_schema for ad-hoc plain text.",
     parameters: Type.Object({
       target: Type.String({ description: "Teammate name (preferred, scoped to your project) or session_id." }),
       prompt: Type.String({ description: "The question or task." }),
-      response_schema: Type.Optional(Type.Any({ description: "Optional JSON Schema; the teammate is asked to reply with matching JSON." })),
+      protocol: Type.Optional(Type.String({ description: "Named protocol from this team's protocol spec (see coms_protocols). Resolves to the protocol's response_schema automatically. Omit for ad-hoc plain text." })),
+      response_schema: Type.Optional(Type.Any({ description: "Explicit JSON Schema override (use protocol: instead when a named protocol fits)." })),
       conversation_id: Type.Optional(Type.String({ description: "Optional id to thread a multi-message exchange." })),
     }),
     async execute(_id, params) {
       if (!identity) return errResult("coms-bus not initialised");
       const target = resolveTarget(params.target, identity.project);
       if (!target) return errResult(`coms: no live teammate "${params.target}"`);
+
+      // Resolve protocol name to schema if provided
+      let resolvedSchema = params.response_schema ?? null;
+      if (params.protocol) {
+        const schema = resolveProtocolSchema(params.protocol);
+        if (!schema) return errResult(`coms: unknown protocol "${params.protocol}" — run coms_protocols() to see available protocols`);
+        resolvedSchema = schema;
+      }
 
       // ── Reply safety net ──────────────────────────────────────────────────
       // If we're currently servicing an inbound from THIS teammate, the agent
@@ -699,16 +749,31 @@ export default function (pi: ExtensionAPI) {
       if (hops >= MAX_HOPS) return errResult(`coms: hop limit reached (${hops} >= ${MAX_HOPS})`);
 
       const msg_id = ulid();
-      const sent = sendPrompt(target, msg_id, null, params.prompt, params.response_schema ?? null, params.conversation_id ?? null, hops);
+      const sent = sendPrompt(target, msg_id, null, params.prompt, resolvedSchema, params.conversation_id ?? null, hops);
       if (!sent) return errResult(`coms: failed to deliver to "${target.name}" (offline?)`);
 
       return { content: [{ type: "text" as const, text: `coms_send → ${target.name}  (msg_id: ${msg_id})\nDo NOT poll or sleep. The reply will arrive automatically as your next turn. Just wait.` }], details: { msg_id, target: target.name, hops, async: true } };
     },
-    renderCall(args, theme) {
+    renderCall(args, theme, context) {
       const tgt = (args as any).target ?? "?";
       const prompt = (args as any).prompt ?? "";
       const preview = prompt.length > 60 ? prompt.slice(0, 57) + "…" : prompt;
-      return new Text(theme.fg("toolTitle", theme.bold("coms_send ")) + theme.fg("accent", tgt) + theme.fg("dim", " — ") + theme.fg("muted", preview), 0, 0);
+      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+      if (!context.argsComplete) {
+        const tgtHint = tgt !== "?" ? theme.fg("accent", tgt) + "  " : "";
+        text.setText(
+          theme.fg("toolTitle", theme.bold("coms_send ")) +
+          tgtHint + theme.fg("warning", "⟳ composing…") +
+          (preview ? "\n  " + theme.fg("dim", preview) : "")
+        );
+      } else {
+        text.setText(
+          theme.fg("toolTitle", theme.bold("coms_send ")) +
+          theme.fg("accent", tgt) + theme.fg("dim", " — ") +
+          theme.fg("muted", preview)
+        );
+      }
+      return text;
     },
     renderResult(result, _opts, theme) {
       const d = result.details as any;
@@ -720,8 +785,81 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool({
+    name: "coms_protocols",
+    label: "Coms Protocols",
+    description:
+      "List the named message protocols available on this team. Each protocol defines the " +
+      "expected JSON response shape when dispatching a structured task via coms_send. " +
+      "Ad-hoc plain text is always available by omitting protocol from coms_send. " +
+      "Use coms_protocol_describe(name) to see the full schema for a specific protocol.",
+    parameters: Type.Object({}),
+    async execute() {
+      const protos = readProtocols();
+      const entries = Object.values(protos) as any[];
+      if (entries.length === 0) {
+        return { content: [{ type: "text" as const, text: "No named protocols defined for this team. All messages are ad-hoc plain text." }], details: { protocols: [] } };
+      }
+      const lines = [
+        `${entries.length} protocol(s) available on this team:`,
+        ...entries.map((p: any) => `  ${p.name}  —  ${p.description ?? "(no description)"}`),
+        ``,
+        `Ad-hoc plain text is always available (omit protocol from coms_send).`,
+        `Run coms_protocol_describe("<name>") for the full schema.`,
+      ];
+      return {
+        content: [{ type: "text" as const, text: lines.join("\n") }],
+        details: { protocols: entries.map((p: any) => ({ name: p.name, description: p.description })) },
+      };
+    },
+    renderCall(_args, theme) {
+      return new Text(theme.fg("toolTitle", theme.bold("coms_protocols")), 0, 0);
+    },
+    renderResult(result, _opts, theme) {
+      const d = result.details as any;
+      const n = d?.protocols?.length ?? 0;
+      return new Text(theme.fg(n ? "accent" : "dim", n ? `${n} protocol(s)` : "no protocols"), 0, 0);
+    },
+  });
+
+  pi.registerTool({
+    name: "coms_protocol_describe",
+    label: "Protocol Describe",
+    description:
+      "Show the full JSON schema and description for a named protocol. " +
+      "Run this before dispatching a task with protocol: \"<name>\" to know exactly what " +
+      "response structure to expect. Run coms_protocols() to list available names.",
+    parameters: Type.Object({
+      name: Type.String({ description: "Protocol name (from coms_protocols)." }),
+    }),
+    async execute(_id, params) {
+      const protos = readProtocols();
+      const p = protos[params.name] as any;
+      if (!p) {
+        const available = Object.keys(protos).join(", ") || "(none)";
+        return { content: [{ type: "text" as const, text: `Unknown protocol "${params.name}". Available: ${available}` }], details: {}, isError: true };
+      }
+      const text = [
+        `## Protocol: ${p.name}`,
+        ``,
+        p.description ?? "(no description)",
+        ``,
+        `### Response schema`,
+        ``,
+        p.schema ? `\`\`\`json\n${JSON.stringify(p.schema, null, 2)}\n\`\`\`` : "(no schema — ad-hoc plain text)",
+      ].join("\n");
+      return { content: [{ type: "text" as const, text }], details: { protocol: p } };
+    },
+    renderCall(args, theme) {
+      return new Text(theme.fg("toolTitle", theme.bold("coms_protocol_describe ")) + theme.fg("accent", (args as any).name ?? "?"), 0, 0);
+    },
+    renderResult(result, _opts, theme) {
+      if (result.isError) return new Text(theme.fg("error", "✗ ") + theme.fg("muted", result.content[0]?.text ?? ""), 0, 0);
+      return new Text(theme.fg("success", "✓ ") + theme.fg("dim", "schema loaded"), 0, 0);
+    },
+  });
+
+  pi.registerTool({
     name: "coms_broadcast",
-    label: "Coms Broadcast",
     description:
       "Send the same question/task to multiple teammates at once. Always async: returns a " +
       "group_id and the per-teammate msg_ids; each answer arrives as its own follow-up message. " +
@@ -764,9 +902,22 @@ export default function (pi: ExtensionAPI) {
         details: { group_id, msg_ids, recipients: delivered },
       };
     },
-    renderCall(args, theme) {
+    renderCall(args, theme, context) {
       const tgts = ((args as any).targets ?? []).join(", ");
-      return new Text(theme.fg("toolTitle", theme.bold("coms_broadcast ")) + theme.fg("accent", tgts), 0, 0);
+      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+      if (!context.argsComplete) {
+        const tgtsHint = tgts ? theme.fg("accent", tgts) + "  " : "";
+        text.setText(
+          theme.fg("toolTitle", theme.bold("coms_broadcast ")) +
+          tgtsHint + theme.fg("warning", "⟳ composing…")
+        );
+      } else {
+        text.setText(
+          theme.fg("toolTitle", theme.bold("coms_broadcast ")) +
+          theme.fg("accent", tgts)
+        );
+      }
+      return text;
     },
     renderResult(result, _opts, theme) {
       const d = result.details as any;
@@ -872,6 +1023,8 @@ export default function (pi: ExtensionAPI) {
     if (!deliverMessage(target, msg)) return false;
     pending.set(msg_id, { msg_id, group_id, target_name: target.name, created_at: nowIso() });
     pi.appendEntry("coms-bus-log", { event: "outbound_prompt", msg_id, to: target.name, group_id, hops });
+    logComs({ event: "send", from: identity?.name, to: target.name, msg_id, group_id, hops,
+      preview: (prompt ?? "").slice(0, 300).replace(/\n/g, " ") });
     return true;
   }
 
@@ -895,6 +1048,9 @@ export default function (pi: ExtensionAPI) {
     try { deliverMessage(target, reply); }
     catch { /* best-effort */ }
     pi.appendEntry("coms-bus-log", { event: "outbound_response", msg_id: inb.msg_id, to: target.name, error });
+    logComs({ event: "reply", from: identity?.name, to: target.name, msg_id: inb.msg_id, error: error ?? null,
+      parse_failed: error !== null,
+      preview: payload === null ? (error ? `(parse_failed: ${error})` : "(null)") : (typeof payload === "string" ? payload : JSON.stringify(payload) ?? "").slice(0, 300).replace(/\n/g, " ") });
     ackPrompt(inb.msg_id); // reply shipped — safe to drop the .inflight claim
   }
 
@@ -932,8 +1088,9 @@ export default function (pi: ExtensionAPI) {
               for (const p of peers) {
                 const stale = Date.now() - new Date(p.heartbeat_at).getTime() > STALE_MS;
                 const dot = stale ? theme.fg("warning", "◐") : theme.fg("success", "●");
-                const row = truncateToWidth(`${p.name}  ${shortModel(p.model)}  ${p.context_used_pct}%${p.queue_depth ? ` q${p.queue_depth}` : ""}`, inner - 3);
-                lines.push(cell(" " + dot + " " + theme.fg("muted", row)));
+                const inboxLabel = p.queue_depth > 0 ? theme.fg("warning", ` inbox:${p.queue_depth}`) : theme.fg("dim", ` inbox:0`);
+                const row = truncateToWidth(`${p.name}  ${shortModel(p.model)}  ${p.context_used_pct}%`, inner - 3 - (p.queue_depth > 0 ? 0 : 8));
+                lines.push(cell(" " + dot + " " + theme.fg("muted", row) + inboxLabel));
               }
             }
             lines.push(bot);
@@ -968,6 +1125,11 @@ export default function (pi: ExtensionAPI) {
     try {
       const active = new Set(pi.getActiveTools());
       for (const t of COMS_TOOLS) { if (on) active.add(t); else active.delete(t); }
+      // Protocol tools only when a protocols file is present for this session
+      for (const t of PROTOCOL_TOOLS) {
+        if (on && COMS_PROTOCOLS_FILE && existsSync(COMS_PROTOCOLS_FILE)) active.add(t);
+        else active.delete(t);
+      }
       for (const t of ALWAYS_ACTIVE_TOOLS) active.add(t);
       pi.setActiveTools([...active]);
     } catch { /* ignore */ }
@@ -1001,7 +1163,8 @@ export default function (pi: ExtensionAPI) {
     }
     onInboxChange(); // pick up anything already queued
     refreshWidget();
-    pi.appendEntry("coms-bus-log", { event: "join", name: identity.name, project: identity.project, session_id: identity.session_id });
+    pi.appendEntry("coms-bus-log", { event: "join", from: identity.name, project: identity.project, session_id: identity.session_id });
+    logComs({ event: "join", from: identity.name, project: identity.project });
     ctx.ui?.notify?.(`coms: joined "${identity.project}" as "${identity.name}".`, "info");
     return true;
   }
@@ -1015,7 +1178,7 @@ export default function (pi: ExtensionAPI) {
     const wasProject = identity?.project, wasName = identity?.name;
     if (identity) {
       removeRegistry(identity.project, identity.name);
-      try { pi.appendEntry("coms-bus-log", { event: "leave", name: identity.name, session_id: identity.session_id }); } catch { /* ignore */ }
+      try { pi.appendEntry("coms-bus-log", { event: "leave", from: identity.name, session_id: identity.session_id }); } catch { /* ignore */ }
     }
     // Drop in-flight state so a later rejoin starts clean.
     pending.clear(); inboundQueue.length = 0; currentInbound = null; prompts.clear();

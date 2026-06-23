@@ -263,8 +263,8 @@ export function agentTeamsWorkdir(): string {
 export function makeUnitOfWorkId(task: string): string {
   const now = new Date();
   const pad = (n: number, w = 2) => String(n).padStart(w, "0");
-  const ts  = `${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}-` +
-              `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  const ts  = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}_` +
+              `${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
   const firstLine = task.split("\n").map(l => l.trim()).find(l => l.length > 0) ?? task;
   const slug = firstLine.toLowerCase()
     .replace(/[^a-z0-9\s-]/g, "")
@@ -317,6 +317,7 @@ export default function (pi: ExtensionAPI) {
   let modelId = "";
   let contextTokens = 0, totalOutput = 0, totalCost = 0, totalTurns = 0;
   let sessionCtx: any = null;
+  let sessionFile: string | null = null;
 
   // extFile cleaned up by parent (pi watches -e files; self-deletion unloads the extension)
 
@@ -330,16 +331,17 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", (_event, ctx) => {
     sessionCtx = ctx;
+    sessionFile = ctx.sessionManager.getSessionFile() ?? null;
     if (fired) return;
     fired = true;
-    writeState({ status: "running" });
+    writeState({ status: "running", sessionFile });
     pi.sendUserMessage(${JSON.stringify(task)});
   });
 
   // Each turn starting means the run is active (e.g. resuming after the human
   // cleared a guardrails prompt) — clear any transient "stopped" state.
   pi.on("turn_start", () => {
-    writeState({ status: "running", model: modelId || undefined });
+    writeState({ status: "running", model: modelId || undefined, sessionFile });
   });
 
   // After each turn, snapshot the live context-window size (same source as the
@@ -357,6 +359,7 @@ export default function (pi: ExtensionAPI) {
     writeState({
       status: "running",
       model: modelId || undefined,
+      sessionFile,
       usage: { turns: totalTurns, input: contextTokens, output: totalOutput, cost: totalCost, elapsedMs: Date.now() - startedAt },
     });
   });
@@ -414,6 +417,7 @@ export default function (pi: ExtensionAPI) {
       status: PERSISTENT ? persistStatus : "done",
       output: finalOutput || "(no output)",
       model: modelId || undefined,
+      sessionFile,
       usage: { turns: totalTurns, input, output: totalOutput, cost: totalCost, elapsedMs: Date.now() - startedAt },
       seq: ++seq,
       workDir: COORD_WORK_DIR || undefined,
@@ -523,12 +527,21 @@ export function spawnAgentWindow(opts: SpawnOptions): SpawnHandle {
       "\n\n---",
       "## Your role: Team Coordinator",
       "",
-      "You are the coordinator for this team. Your responsibilities:",
-      "1. Read your task from: " + workDir + "/input.md",
-      "2. Delegate work to team specialists via the coms bus (coms_list shows who is available)",
-      "3. Send tasks with coms_send — replies arrive automatically as your next turn, do NOT poll",
-      "4. Synthesize all findings once the work is complete",
-      "5. Use the write tool to write your final report to: " + workDir + "/output.md",
+      "You are the coordinator for this team. Your work directory: " + workDir,
+      "",
+      "Files available in your work directory:",
+      "  input.md         — " + workDir + "/input.md         (your task)",
+      "  blackboard.md    — " + workDir + "/blackboard.md    (shared state ledger — write task graph and status updates here)",
+      "  task-ledger.json — " + workDir + "/task-ledger.json (structured subtask tracking — read/write as you work)",
+      "  output.md        — " + workDir + "/output.md        (your final report — write this LAST)",
+      "",
+      "Your general responsibilities:",
+      "1. Read your task from input.md",
+      "2. Decompose the task and write your task graph to blackboard.md",
+      "3. Track subtask progress in task-ledger.json",
+      "4. Delegate subtasks to specialists and collect structured findings",
+      "5. Synthesize all findings once the work is complete",
+      "6. Use the write tool to write your final report to: " + workDir + "/output.md",
       "",
       "CRITICAL OUTPUT RULE: You MUST use the write tool to create output.md at the path above.",
       "Do NOT write the report as plain chat text — it must be a file on disk.",

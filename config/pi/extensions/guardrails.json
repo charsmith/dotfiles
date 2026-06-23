@@ -4,6 +4,7 @@
     "completed": true,
     "completedAt": "2026-06-09T16:57:48.629Z"
   },
+  "applyBuiltinDefaults": true,
   "features": {
     "pathAccess": true
   },
