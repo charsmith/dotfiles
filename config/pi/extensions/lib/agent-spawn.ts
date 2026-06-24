@@ -6,7 +6,7 @@
  * tools) and `pi-chain.ts` (the sequential chain orchestrator) build on, so the
  * spawn mechanics and the IPC contract live in exactly one place and never
  * drift. It owns:
- *   - agent-definition loading (~/.config/pi/agents/<name>.md) + skill resolution
+ *   - agent-definition loading (<workspace>/agents/<name>.md) + skill resolution
  *   - the shared status/usage/state types
  *   - token/elapsed/usage formatting + the compact model label
  *   - tmux helpers (session, pane→window, pane liveness, send-keys)
@@ -32,6 +32,7 @@ import { execFileSync, execSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { workspaceAgentDir } from "./workspace.ts";
 
 // ─── Agent definition loader ────────────────────────────────────────────────
 
@@ -62,10 +63,13 @@ export function resolveSkillPath(skillName: string): string | null {
 }
 
 export function loadAgentDef(agentName: string): AgentDef | null {
-  const searchDirs = [
-    path.join(os.homedir(), ".config", "pi", "agents"),
-    path.join(os.homedir(), ".pi", "agents"),
-  ];
+  const searchDirs: string[] = [];
+  // Workspace first (see agent-workspace.json)
+  const ws = workspaceAgentDir();
+  if (ws) searchDirs.push(ws);
+  searchDirs.push(path.join(os.homedir(), ".pi", "agents"));
+  // Legacy fallback when no workspace configured
+  if (!ws) searchDirs.push(path.join(os.homedir(), ".config", "pi", "agents"));
   for (const dir of searchDirs) {
     const filePath = path.join(dir, `${agentName}.md`);
     if (!existsSync(filePath)) continue;

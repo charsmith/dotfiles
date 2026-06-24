@@ -1207,10 +1207,10 @@ ${stepOutput.output}` }], details: { chain: def.name } };
       "the coordinator delivers a follow-up when done. " +
       "Chains run as sequential pipelines via run_chain. " +
       "A budget cap (USD, default $20) is enforced for teams. " +
-      "Charters live in ~/.config/pi/charters/. Use catalog_list() to see what's available.",
+      "Charters live in the pi_agents/charters/ workspace. Use catalog_list() to see what's available.",
     promptSnippet: "Run a declared agent charter (team or chain) against a task",
     parameters: Type.Object({
-      charter: Type.String({ description: "Charter name (from ~/.config/pi/charters/)." }),
+      charter: Type.String({ description: "Charter name (from the workspace charters/ dir)." }),
       input:   Type.String({ description: "The task or question to work on." }),
       budget:  Type.Optional(Type.Number({ description: "Spending cap in USD (default $20.00)." })),
     }),
@@ -1468,7 +1468,7 @@ ${stepOutput.output}` }], details: { chain: def.name } };
       "background agent you can also use agent_reply. NOTE: this tool is only",
       "available to the top-level session and subagents with spawn_agents: true",
       "in their agent definition.",
-      "agent (optional): name of an agent definition from ~/.config/pi/agents/<name>.md",
+      "agent (optional): name of an agent definition from the workspace agents/ dir",
       "— applies that agent's system prompt, tool restrictions, skills, and spawn policy.",
       "team (optional): launch as a PERSISTENT coms-bus member of this team (project).",
       "The agent stays alive (it is not killed when its first turn ends) and is",
@@ -1497,7 +1497,7 @@ ${stepOutput.output}` }], details: { chain: def.name } };
       })),
       agent: Type.Optional(Type.String({
         description:
-          "Agent definition name to load from ~/.config/pi/agents/<name>.md. " +
+          "Agent definition name to load from <workspace>/agents/<name>.md. " +
           "Applies the agent's system prompt and tool restrictions to the subagent session.",
       })),
       team: Type.Optional(Type.String({
@@ -1537,7 +1537,7 @@ ${stepOutput.output}` }], details: { chain: def.name } };
         agentDef = loadAgentDef(params.agent);
         if (!agentDef) {
           return {
-            content: [{ type: "text", text: `Agent definition "${params.agent}" not found in ~/.config/pi/agents/ or ~/.pi/agents/` }],
+            content: [{ type: "text", text: `Agent definition "${params.agent}" not found in workspace agents/ or .pi/agents/` }],
             details: {}, isError: true,
           };
         }

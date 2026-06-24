@@ -205,7 +205,7 @@ export default function (pi: ExtensionAPI) {
     handler: async (args, ctx) => {
       const charters = loadCharters();
       if (charters.length === 0) {
-        ctx.ui.notify("No charters found in ~/.config/pi/charters/", "warning");
+        ctx.ui.notify("No charters found. Add .yaml files to your pi_agents/charters/ workspace.", "warning");
         return;
       }
 
