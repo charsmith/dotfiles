@@ -10,3 +10,5 @@ config/bash/locals/*.local.sh
 config/pi/models.json
 # Skills are managed in their own repos (symlinks) or locally — not tracked here
 config/pi/skills/
+# Sound files — binary assets, not committed
+config/pi/sounds/

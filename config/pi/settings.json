@@ -7,5 +7,8 @@
     "npm:@aliou/pi-guardrails"
   ],
   "steeringMode": "one-at-a-time",
-  "theme": "dark"
+  "theme": "dark",
+  "extensions": [
+    "~/code/hacking/hangar/extensions"
+  ]
 }
