@@ -14,6 +14,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as os from "node:os";
+import { workspaceCharterDir } from "./lib/workspace.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import { Container, Input, SelectList, Spacer, Text } from "@earendil-works/pi-tui";
@@ -27,25 +28,36 @@ interface CharterEntry {
 }
 
 function loadCharters(): CharterEntry[] {
-  const chartersDir = join(os.homedir(), ".config", "pi", "charters");
-  if (!existsSync(chartersDir)) return [];
+  // Check all charter dirs: workspace first, then project-local, then legacy
+  const dirs: string[] = [];
+  const ws = workspaceCharterDir();
+  if (ws) dirs.push(ws);
+  dirs.push(join(process.cwd(), ".pi", "charters"));
+  if (!ws) dirs.push(join(os.homedir(), ".config", "pi", "charters"));
 
-  const files = readdirSync(chartersDir).filter(
-    (f) => (f.endsWith(".yaml") || f.endsWith(".yml")) && !f.endsWith(".bak"),
-  );
+  const seen = new Set<string>();
+  const entries: CharterEntry[] = [];
 
-  return files
-    .map((f) => {
+  for (const chartersDir of dirs) {
+    if (!existsSync(chartersDir)) continue;
+    const files = readdirSync(chartersDir).filter(
+      (f) => (f.endsWith(".yaml") || f.endsWith(".yml")) && !f.endsWith(".bak"),
+    );
+    for (const f of files) {
       const name = f.replace(/\.ya?ml$/, "");
+      if (seen.has(name)) continue;
+      seen.add(name);
       try {
         const content = readFileSync(join(chartersDir, f), "utf-8");
         const m = content.match(/^description:\s*["']?(.+?)["']?\s*$/m);
-        return { name, description: m ? m[1].replace(/^["']|["']$/g, "").trim() : "" };
+        entries.push({ name, description: m ? m[1].replace(/^["']|["']$/g, "").trim() : "" });
       } catch {
-        return { name, description: "" };
+        entries.push({ name, description: "" });
       }
-    })
-    .sort((a, b) => a.name.localeCompare(b.name));
+    }
+  }
+
+  return entries.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 // ─── Shared SelectList UI builder ─────────────────────────────────────────────

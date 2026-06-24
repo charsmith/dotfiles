@@ -15,7 +15,9 @@
  *
  * Chains are declared in YAML (see lib/mini-yaml.ts for the supported subset):
  *
- *   ~/.config/pi/agents/agent-chain.yaml   (and ./.pi/agents/agent-chain.yaml)
+ *   <workspace>/charters/<name>.yaml  (see agent-workspace.json)
+ *   .pi/charters/<name>.yaml           (project-local)
+ *   <workspace>/agents/agent-chain.yaml (legacy monolithic, back-compat)
  *
  *   dp-research:
  *     kind: chain
@@ -564,7 +566,7 @@ export default function (pi: ExtensionAPI) {
       "subagent whose output becomes the next step's $INPUT ($ORIGINAL is always",
       "the original input). Steps run in order in tmux windows and the chain halts",
       "on the first error. Use this for staged multi-agent work (e.g. research →",
-      "synthesize → write). Chains are declared in ~/.config/pi/agents/agent-chain.yaml;",
+      "synthesize → write). Chains are declared in <workspace>/charters/; see /ag:chains.",
       "see /chain-list for available chains. Returns the final step's output.",
     ].join(" "),
     promptSnippet: "Run a declared agent chain (output of each step pipes to the next)",
@@ -707,7 +709,7 @@ export default function (pi: ExtensionAPI) {
       latestCtx = ctx;
       const { chains, errors } = loadChains();
       if (chains.size === 0) {
-        ctx.ui.notify(`No chains defined.${errors.length ? " Errors: " + errors.join("; ") : " Add some to ~/.config/pi/agents/agent-chain.yaml."}`, "warning");
+        ctx.ui.notify(`No chains defined.${errors.length ? " Errors: " + errors.join("; ") : " Add a kind:chain charter to your pi_agents/charters/ dir."}`, "warning");
         return;
       }
       const arg = (args ?? "").trim();
@@ -728,7 +730,7 @@ export default function (pi: ExtensionAPI) {
     handler: async (_args, ctx) => {
       latestCtx = ctx;
       const { chains, errors } = loadChains();
-      if (chains.size === 0 && errors.length === 0) { ctx.ui.notify("No chains defined. Add some to ~/.config/pi/agents/agent-chain.yaml.", "info"); return; }
+      if (chains.size === 0 && errors.length === 0) { ctx.ui.notify("No chains defined. Add a kind:chain charter to your pi_agents/charters/ dir.", "info"); return; }
       const blocks = [...chains.values()].map(c => {
         const star = c.name === activeChain ? " ★" : "";
         const steps = c.steps.map((s, i) => `   ${i + 1}. ${s.agent || "(inline)"}`).join("\n");
