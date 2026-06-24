@@ -14,7 +14,7 @@ import { existsSync, readFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-const CONFIG_PATH = path.join(os.homedir(), ".config", "pi", "agent-workspace.json");
+export const CONFIG_PATH = path.join(os.homedir(), ".config", "pi", "agent-workspace.json");
 
 export interface WorkspaceConfig {
   workspace: string;   // absolute resolved path
