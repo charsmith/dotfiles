@@ -23,8 +23,8 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { DynamicBorder } from "@earendil-works/pi-coding-agent";
-import { Container, type SelectItem, SelectList, Spacer, Text } from "@earendil-works/pi-tui";
+import { DynamicBorder, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
+import { Container, Input, type SelectItem, SelectList, type SettingItem, SettingsList, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
   CONFIG_PATH,
@@ -280,11 +280,170 @@ export function catalogDigest(): string {
 
 // ─── Extension ────────────────────────────────────────────────────────────────
 
-// ─── Init menu helper ────────────────────────────────────────────────────────────────
+// ─── Workspace settings panel (───────────────────────────────────────────────────
 //
-// Framed SelectList panel used by /ag:init. Small fixed menus — no filter needed.
+// Used by /ag:init for both first-time setup and reconfiguration.
+// - Workspace path: editable via Input submenu
+// - autoCommit: cycles in-place with Enter
+// - Save item shows ● when dirty; writes config and closes on Enter
+// - No /reload needed: getWorkspace() re-reads the file on every call
 
 type CmdCtx = Parameters<Parameters<ExtensionAPI["registerCommand"]>[1]["handler"]>[1];
+type TuiHandle = { requestRender(): void };
+
+function buildWorkspacePanel(
+  tui: TuiHandle,
+  theme: ReturnType<typeof getSettingsListTheme> extends { label: any } ? never : any,
+  current: { workspace: string; autoCommit: boolean } | null,
+  done: (v?: void) => void,
+  ctx: CmdCtx,
+): { render(w: number): string[]; invalidate(): void; handleInput(d: string): void } {
+  const defaultPath = "~/code/hacking/pi_agents";
+  let draft = {
+    workspace: current?.workspace ?? defaultPath.replace(/^~/, os.homedir()),
+    autoCommit: current?.autoCommit ?? true,
+  };
+
+  // Counts for subtitle
+  const countIn = (sub: string, ext: string) => {
+    try { return readdirSync(path.join(draft.workspace, sub)).filter(f => f.endsWith(ext)).length; } catch { return 0; }
+  };
+
+  function isGit() { return existsSync(path.join(draft.workspace, ".git")); }
+  function computeDirty() {
+    return draft.workspace !== (current?.workspace ?? "") || draft.autoCommit !== (current?.autoCommit ?? true);
+  }
+
+  let isDirty = current === null; // fresh = dirty so Save is immediately available
+  let list: SettingsList;
+
+  // ── Path input submenu ────────────────────────────────────────────────────
+  function buildPathSubmenu(_val: string, submenuDone: (v?: string) => void): { render(w: number): string[]; invalidate(): void; handleInput(d: string): void } {
+    const input = new Input();
+    input.setValue(draft.workspace.replace(os.homedir(), "~"));
+    input.focused = true;
+    input.onSubmit = (value) => {
+      const newPath = value.trim().replace(/^~/, os.homedir());
+      if (newPath) {
+        draft.workspace = newPath;
+        isDirty = computeDirty() || current === null;
+        list.updateValue("workspace", newPath.replace(os.homedir(), "~"));
+        list.updateValue("save", isDirty ? "●" : "—");
+      }
+      submenuDone(newPath.replace(os.homedir(), "~"));
+    };
+    input.onEscape = () => submenuDone(undefined);
+
+    const c = new Container();
+    c.addChild(new DynamicBorder((s: string) => theme.fg("borderAccent", s)));
+    c.addChild(new Text(theme.fg("accent", theme.bold(" Workspace path")), 1, 0));
+    c.addChild(new Text(theme.fg("dim", " Enter the path to your pi_agents git repo (~ supported)"), 1, 0));
+    c.addChild(new Spacer(1));
+    c.addChild(input);
+    c.addChild(new Spacer(1));
+    c.addChild(new Text(theme.fg("dim", " enter confirm · esc cancel"), 1, 0));
+    c.addChild(new DynamicBorder((s: string) => theme.fg("borderAccent", s)));
+    return {
+      render: (w) => c.render(w),
+      invalidate: () => c.invalidate(),
+      handleInput(d: string) { input.handleInput(d); tui.requestRender(); },
+    };
+  }
+
+  // ── Save submenu ──────────────────────────────────────────────────────────
+  function buildSaveSubmenu(_val: string, submenuDone: (v?: string) => void): { render(w: number): string[]; invalidate(): void; handleInput(d: string): void } {
+    if (!isDirty) {
+      submenuDone(undefined);
+      return { render: () => [], invalidate: () => {} };
+    }
+    // Initialize workspace dir if needed
+    const resolved = draft.workspace;
+    const dirExists  = existsSync(resolved);
+    const hasGit     = existsSync(path.join(resolved, ".git"));
+    try {
+      if (!dirExists || !hasGit) {
+        mkdirSync(path.join(resolved, "agents"),   { recursive: true });
+        mkdirSync(path.join(resolved, "charters"), { recursive: true });
+        mkdirSync(path.join(resolved, "skills"),   { recursive: true });
+        if (!hasGit) {
+          execSync(`git -C ${JSON.stringify(resolved)} init`, { stdio: "pipe" });
+          writeFileSync(path.join(resolved, ".gitignore"), "*.bak.*\n*.bak\n", "utf-8");
+          execSync(`git -C ${JSON.stringify(resolved)} add .gitignore`, { stdio: "pipe" });
+          execSync(`git -C ${JSON.stringify(resolved)} commit -m "chore: init pi_agents workspace"`, { stdio: "pipe" });
+        }
+      }
+      const config = { workspace: resolved.replace(os.homedir(), "~"), autoCommit: draft.autoCommit };
+      writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + "\n", "utf-8");
+      isDirty = false;
+      ctx.ui.notify("✓ Saved. Changes take effect immediately.", "info");
+    } catch (e: any) {
+      ctx.ui.notify(`Save failed: ${e?.message ?? e}`, "error");
+    }
+    submenuDone("✓");
+    done();
+    return { render: () => [], invalidate: () => {} };
+  }
+
+  // ── Build panel ───────────────────────────────────────────────────────────
+  const isNew = current === null;
+  const subtitle = isNew
+    ? "No workspace configured yet"
+    : `${current!.workspace.replace(os.homedir(), "~")}  ·  ${countIn("agents", ".md")} agents · ${countIn("charters", ".yaml")} charters · git: ${isGit() ? "yes" : "no"}`;
+
+  const container = new Container();
+  container.addChild(new DynamicBorder((s: string) => theme.fg("borderAccent", s)));
+  container.addChild(new Text(theme.fg("accent", theme.bold(" ag:init — Workspace")), 1, 0));
+  container.addChild(new Text(theme.fg("muted", ` ${subtitle}`), 1, 0));
+  container.addChild(new Spacer(1));
+
+  list = new SettingsList(
+    [
+      {
+        id: "workspace",
+        label: "Workspace path",
+        currentValue: draft.workspace.replace(os.homedir(), "~"),
+        description: "Path to the pi_agents git repo",
+        submenu: buildPathSubmenu,
+      },
+      {
+        id: "autoCommit",
+        label: "Auto-commit",
+        currentValue: draft.autoCommit ? "on" : "off",
+        values: ["on", "off"],
+        description: "Commit after every agent/charter write",
+      },
+      {
+        id: "save",
+        label: "Save",
+        currentValue: isDirty ? "●" : "—",
+        description: "Write to agent-workspace.json (changes take effect immediately)",
+        submenu: buildSaveSubmenu,
+      },
+    ],
+    8,
+    getSettingsListTheme(),
+    (id, newValue) => {
+      if (id === "autoCommit") {
+        draft.autoCommit = newValue === "on";
+        isDirty = computeDirty() || current === null;
+        list.updateValue("save", isDirty ? "●" : "—");
+      }
+    },
+    () => done(),
+  );
+
+  container.addChild(list);
+  container.addChild(new Spacer(1));
+  container.addChild(new DynamicBorder((s: string) => theme.fg("borderAccent", s)));
+
+  return {
+    render: (w) => container.render(w),
+    invalidate: () => container.invalidate(),
+    handleInput(d: string) { list.handleInput(d); tui.requestRender(); },
+  };
+}
+
+// ─── showInitMenu helper (used by first-time path for simple choices) ───────────────
 
 async function showInitMenu(
   ctx: CmdCtx,
@@ -769,107 +928,14 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // ── /ag:init ──────────────────────────────────────────────────────────────
+  // ── /ag:init ───────────────────────────────────────────────────────────────
 
   pi.registerCommand("ag:init", {
     description: "Initialize or reconfigure the pi agents workspace",
     handler: async (_args, ctx) => {
       const existing = getWorkspace();
-
-      if (existing) {
-        // Already configured: show status + action menu
-        const agentCount   = (() => { try { return readdirSync(path.join(existing.workspace, "agents")).filter(f => f.endsWith(".md")).length; } catch { return 0; } })();
-        const charterCount = (() => { try { return readdirSync(path.join(existing.workspace, "charters")).filter(f => f.endsWith(".yaml") || f.endsWith(".yml")).length; } catch { return 0; } })();
-        const isGit    = existsSync(path.join(existing.workspace, ".git"));
-        const subtitle = `${existing.workspace}  ·  ${agentCount} agents · ${charterCount} charters · autoCommit: ${existing.autoCommit ? "on" : "off"} · git: ${isGit ? "yes" : "no"}`;
-
-        const choice = await showInitMenu(ctx, "ag:init — Workspace", subtitle, [
-          { value: "path",   label: "Reconfigure path",  description: "Change where the workspace repo lives" },
-          { value: "commit", label: "Toggle autoCommit",  description: `Currently: ${existing.autoCommit ? "on → off" : "off → on"}` },
-          { value: "cancel", label: "Cancel",             description: "" },
-        ]);
-        if (!choice || choice === "cancel") return;
-
-        if (choice === "commit") {
-          const updated = { workspace: existing.workspace.replace(os.homedir(), "~"), autoCommit: !existing.autoCommit };
-          writeFileSync(CONFIG_PATH, JSON.stringify(updated, null, 2) + "\n", "utf-8");
-          ctx.ui.notify(`autoCommit → ${updated.autoCommit}. Run /reload to apply.`, "info");
-          return;
-        }
-        // "path" falls through to path-entry flow
-
-      } else {
-        // Not yet configured: onboarding entry point
-        const intro = await showInitMenu(ctx, "ag:init — Setup", "No workspace configured yet.", [
-          { value: "setup",  label: "Set up workspace", description: "Choose a path, create dirs, initialize git" },
-          { value: "cancel", label: "Cancel",           description: "" },
-        ]);
-        if (!intro || intro === "cancel") return;
-      }
-
-      // Path entry
-      const defaultPath = existing?.workspace.replace(os.homedir(), "~") ?? "~/code/hacking/pi_agents";
-      const rawPath = await ctx.ui.input("Workspace path", { placeholder: defaultPath, initialValue: defaultPath });
-      if (!rawPath?.trim()) { ctx.ui.notify("Cancelled.", "info"); return; }
-
-      const resolved  = rawPath.trim().replace(/^~/, os.homedir());
-      const dirExists = existsSync(resolved);
-      const hasGit    = existsSync(path.join(resolved, ".git"));
-
-      // Determine mode
-      let mode: string | null;
-      if (dirExists && hasGit) {
-        mode = "existing";  // existing git repo — just point config at it
-      } else if (dirExists) {
-        mode = await showInitMenu(ctx, "ag:init — Existing Directory",
-          `${resolved} exists but is not a git repo.`,
-          [
-            { value: "init",   label: "Initialize here", description: "git init + create agents/, charters/, skills/" },
-            { value: "cancel", label: "Cancel",          description: "" },
-          ],
-        );
-      } else {
-        mode = await showInitMenu(ctx, "ag:init — New Workspace",
-          `${resolved} does not exist.`,
-          [
-            { value: "init",   label: "Create workspace", description: "mkdir + git init + subdirs + .gitignore" },
-            { value: "cancel", label: "Cancel",           description: "" },
-          ],
-        );
-      }
-      if (!mode || mode === "cancel") { ctx.ui.notify("Cancelled.", "info"); return; }
-
-      // Create workspace if needed
-      if (mode === "init") {
-        try {
-          mkdirSync(path.join(resolved, "agents"),   { recursive: true });
-          mkdirSync(path.join(resolved, "charters"), { recursive: true });
-          mkdirSync(path.join(resolved, "skills"),   { recursive: true });
-          execSync(`git -C ${JSON.stringify(resolved)} init`, { stdio: "pipe" });
-          writeFileSync(path.join(resolved, ".gitignore"), "*.bak.*\n*.bak\n", "utf-8");
-          execSync(`git -C ${JSON.stringify(resolved)} add .gitignore`, { stdio: "pipe" });
-          execSync(`git -C ${JSON.stringify(resolved)} commit -m "chore: init pi_agents workspace"`, { stdio: "pipe" });
-        } catch (e: any) {
-          ctx.ui.notify(`Setup failed: ${e?.message ?? e}`, "error"); return;
-        }
-      }
-
-      // autoCommit preference
-      const commitChoice = await showInitMenu(ctx, "ag:init — Auto-commit",
-        "Automatically commit after every agent/charter write?",
-        [
-          { value: "on",  label: "Yes — auto-commit", description: "Every write creates a conventional-commit with a derived message" },
-          { value: "off", label: "No — manual only",  description: "You commit to the workspace repo yourself" },
-        ],
-      );
-      if (commitChoice === null) { ctx.ui.notify("Cancelled.", "info"); return; }
-
-      // Write config
-      const newConfig = { workspace: rawPath.trim(), autoCommit: commitChoice === "on" };
-      writeFileSync(CONFIG_PATH, JSON.stringify(newConfig, null, 2) + "\n", "utf-8");
-      ctx.ui.notify(
-        [`✓ Workspace: ${resolved}`, `  autoCommit: ${newConfig.autoCommit}`, `  Run /reload to activate.`].join("\n"),
-        "info",
+      await ctx.ui.custom<void>((tui, theme, _kb, done) =>
+        buildWorkspacePanel(tui, theme, existing, done, ctx)
       );
     },
   });
