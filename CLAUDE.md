@@ -41,6 +41,21 @@ bash ~/.dotfiles/scripts/install-deps-macos.sh    # or install-deps-ubuntu.sh
 - `_<name>` in repo root → symlinked as `~/.<name>` (underscore becomes dot)
 - `scripts/install-symlinks.sh` skips already-symlinked targets; backs up existing files to `<file>.bak`
 
+## pi_agents Repo
+
+Agent definitions, charters, and agent-specific skills live in a dedicated repo
+at `~/code/hacking/pi_agents/` — separate from dotfiles so changes have clean
+git history. The catalog extension reads `~/.config/pi/agent-workspace.json`
+to locate it and auto-commits after every `agent_author` / `charter_author` write.
+
+| Path | Purpose |
+|------|---------|  
+| `~/code/hacking/pi_agents/agents/` | Agent definitions (`.md` with YAML frontmatter) |
+| `~/code/hacking/pi_agents/charters/` | Team and chain charters (`.yaml`) |
+| `~/code/hacking/pi_agents/skills/catalog/` | Catalog skill (agent-specific) |
+| `config/pi/agent-workspace.json` | Pointer to pi_agents repo + autoCommit flag |
+| `config/pi/extensions/lib/workspace.ts` | Workspace resolution + git auto-commit logic |
+
 ## Config Structure
 
 | Path | Purpose |
