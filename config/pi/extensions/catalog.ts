@@ -23,7 +23,8 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { DynamicBorder } from "@earendil-works/pi-coding-agent";
+import { Container, type SelectItem, SelectList, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
   CONFIG_PATH,
@@ -278,6 +279,48 @@ export function catalogDigest(): string {
 }
 
 // ─── Extension ────────────────────────────────────────────────────────────────
+
+// ─── Init menu helper ────────────────────────────────────────────────────────────────
+//
+// Framed SelectList panel used by /ag:init. Small fixed menus — no filter needed.
+
+type CmdCtx = Parameters<Parameters<ExtensionAPI["registerCommand"]>[1]["handler"]>[1];
+
+async function showInitMenu(
+  ctx: CmdCtx,
+  title: string,
+  subtitle: string,
+  items: SelectItem[],
+): Promise<string | null> {
+  return ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
+    const container = new Container();
+    container.addChild(new DynamicBorder((s: string) => theme.fg("borderAccent", s)));
+    container.addChild(new Text(theme.fg("accent", theme.bold(` ${title}`)), 1, 0));
+    if (subtitle) container.addChild(new Text(theme.fg("muted", ` ${subtitle}`), 1, 0));
+    container.addChild(new Spacer(1));
+
+    const list = new SelectList(items, Math.min(items.length + 2, 12), {
+      selectedPrefix: (t) => theme.fg("accent", t),
+      selectedText:   (t) => theme.fg("accent", t),
+      description:    (t) => theme.fg("muted", t),
+      scrollInfo:     (t) => theme.fg("dim", t),
+      noMatch:        (t) => theme.fg("warning", t),
+    });
+    list.onSelect = (item) => done(item.value);
+    list.onCancel  = () => done(null);
+
+    container.addChild(list);
+    container.addChild(new Spacer(1));
+    container.addChild(new Text(theme.fg("dim", " ↑↓ navigate · enter select · esc cancel"), 1, 0));
+    container.addChild(new DynamicBorder((s: string) => theme.fg("borderAccent", s)));
+
+    return {
+      render:     (w) => container.render(w),
+      invalidate: ()  => container.invalidate(),
+      handleInput(d: string) { list.handleInput(d); tui.requestRender(); },
+    };
+  });
+}
 
 export default function (pi: ExtensionAPI) {
   // Catalog tools are main-thread only — subagents don't need to browse or
@@ -734,107 +777,98 @@ export default function (pi: ExtensionAPI) {
       const existing = getWorkspace();
 
       if (existing) {
-        // ── Already configured ─────────────────────────────────────────────
+        // Already configured: show status + action menu
         const agentCount   = (() => { try { return readdirSync(path.join(existing.workspace, "agents")).filter(f => f.endsWith(".md")).length; } catch { return 0; } })();
         const charterCount = (() => { try { return readdirSync(path.join(existing.workspace, "charters")).filter(f => f.endsWith(".yaml") || f.endsWith(".yml")).length; } catch { return 0; } })();
-        const isGit = existsSync(path.join(existing.workspace, ".git"));
+        const isGit    = existsSync(path.join(existing.workspace, ".git"));
+        const subtitle = `${existing.workspace}  ·  ${agentCount} agents · ${charterCount} charters · autoCommit: ${existing.autoCommit ? "on" : "off"} · git: ${isGit ? "yes" : "no"}`;
 
-        const summary = [
-          `Workspace: ${existing.workspace}`,
-          `  ${agentCount} agents · ${charterCount} charters · autoCommit: ${existing.autoCommit} · git: ${isGit ? "yes" : "no"}`,
-        ].join("\n");
-
-        const choice = await ctx.ui.select(summary, [
-          { label: "Reconfigure path",     value: "path" },
-          { label: `Toggle autoCommit (currently: ${existing.autoCommit})`, value: "commit" },
-          { label: "Cancel",               value: "cancel" },
+        const choice = await showInitMenu(ctx, "ag:init — Workspace", subtitle, [
+          { value: "path",   label: "Reconfigure path",  description: "Change where the workspace repo lives" },
+          { value: "commit", label: "Toggle autoCommit",  description: `Currently: ${existing.autoCommit ? "on → off" : "off → on"}` },
+          { value: "cancel", label: "Cancel",             description: "" },
         ]);
         if (!choice || choice === "cancel") return;
 
         if (choice === "commit") {
-          const newConfig = { workspace: existing.workspace.replace(os.homedir(), "~"), autoCommit: !existing.autoCommit };
-          writeFileSync(CONFIG_PATH, JSON.stringify(newConfig, null, 2) + "\n", "utf-8");
-          ctx.ui.notify(`autoCommit → ${newConfig.autoCommit}. Run /reload to apply.`, "info");
+          const updated = { workspace: existing.workspace.replace(os.homedir(), "~"), autoCommit: !existing.autoCommit };
+          writeFileSync(CONFIG_PATH, JSON.stringify(updated, null, 2) + "\n", "utf-8");
+          ctx.ui.notify(`autoCommit → ${updated.autoCommit}. Run /reload to apply.`, "info");
           return;
         }
-        // fall through to reconfigure path
+        // "path" falls through to path-entry flow
+
+      } else {
+        // Not yet configured: onboarding entry point
+        const intro = await showInitMenu(ctx, "ag:init — Setup", "No workspace configured yet.", [
+          { value: "setup",  label: "Set up workspace", description: "Choose a path, create dirs, initialize git" },
+          { value: "cancel", label: "Cancel",           description: "" },
+        ]);
+        if (!intro || intro === "cancel") return;
       }
 
-      // ── Path setup (new or reconfigure) ────────────────────────────────────
-      const defaultPath = existing?.workspace.replace(os.homedir(), "~")
-        ?? "~/code/hacking/pi_agents";
-
+      // Path entry
+      const defaultPath = existing?.workspace.replace(os.homedir(), "~") ?? "~/code/hacking/pi_agents";
       const rawPath = await ctx.ui.input("Workspace path", { placeholder: defaultPath, initialValue: defaultPath });
       if (!rawPath?.trim()) { ctx.ui.notify("Cancelled.", "info"); return; }
 
-      const resolved = rawPath.trim().replace(/^~/, os.homedir());
+      const resolved  = rawPath.trim().replace(/^~/, os.homedir());
+      const dirExists = existsSync(resolved);
+      const hasGit    = existsSync(path.join(resolved, ".git"));
 
-      // ── New vs existing ────────────────────────────────────────────────────
-      const alreadyExists = existsSync(resolved);
-      const hasGit        = existsSync(path.join(resolved, ".git"));
-
+      // Determine mode
       let mode: string | null;
-      if (alreadyExists && hasGit) {
-        // Existing git repo — just point to it
-        mode = "existing";
-        ctx.ui.notify(`Found existing git repo at ${resolved} — will use it as-is.`, "info");
-      } else if (alreadyExists) {
-        // Directory exists but not a git repo
-        mode = await ctx.ui.select(
+      if (dirExists && hasGit) {
+        mode = "existing";  // existing git repo — just point config at it
+      } else if (dirExists) {
+        mode = await showInitMenu(ctx, "ag:init — Existing Directory",
           `${resolved} exists but is not a git repo.`,
           [
-            { label: "Initialize git repo here + create subdirs", value: "init" },
-            { label: "Cancel",                                    value: "cancel" },
+            { value: "init",   label: "Initialize here", description: "git init + create agents/, charters/, skills/" },
+            { value: "cancel", label: "Cancel",          description: "" },
           ],
         );
       } else {
-        // Nothing there yet
-        mode = await ctx.ui.select(
+        mode = await showInitMenu(ctx, "ag:init — New Workspace",
           `${resolved} does not exist.`,
           [
-            { label: "Create new workspace here (git init + subdirs)", value: "init" },
-            { label: "Cancel",                                         value: "cancel" },
+            { value: "init",   label: "Create workspace", description: "mkdir + git init + subdirs + .gitignore" },
+            { value: "cancel", label: "Cancel",           description: "" },
           ],
         );
       }
-
       if (!mode || mode === "cancel") { ctx.ui.notify("Cancelled.", "info"); return; }
 
+      // Create workspace if needed
       if (mode === "init") {
         try {
           mkdirSync(path.join(resolved, "agents"),   { recursive: true });
           mkdirSync(path.join(resolved, "charters"), { recursive: true });
           mkdirSync(path.join(resolved, "skills"),   { recursive: true });
-          if (!hasGit) {
-            execSync(`git -C ${JSON.stringify(resolved)} init`, { stdio: "pipe" });
-            // Seed a .gitignore so bak files are never committed
-            writeFileSync(
-              path.join(resolved, ".gitignore"),
-              "*.bak.*\n*.bak\n",
-              "utf-8",
-            );
-            execSync(`git -C ${JSON.stringify(resolved)} add .gitignore`, { stdio: "pipe" });
-            execSync(`git -C ${JSON.stringify(resolved)} commit -m "chore: init pi_agents workspace"`, { stdio: "pipe" });
-          }
+          execSync(`git -C ${JSON.stringify(resolved)} init`, { stdio: "pipe" });
+          writeFileSync(path.join(resolved, ".gitignore"), "*.bak.*\n*.bak\n", "utf-8");
+          execSync(`git -C ${JSON.stringify(resolved)} add .gitignore`, { stdio: "pipe" });
+          execSync(`git -C ${JSON.stringify(resolved)} commit -m "chore: init pi_agents workspace"`, { stdio: "pipe" });
         } catch (e: any) {
-          ctx.ui.notify(`Setup failed: ${e?.message ?? e}`, "error");
-          return;
+          ctx.ui.notify(`Setup failed: ${e?.message ?? e}`, "error"); return;
         }
       }
 
-      // ── autoCommit preference ──────────────────────────────────────────────
-      const autoCommit = await ctx.ui.confirm("Auto-commit after every agent/charter write?", "");
-
-      // ── Write config ────────────────────────────────────────────────────────
-      const newConfig = { workspace: rawPath.trim(), autoCommit: autoCommit ?? true };
-      writeFileSync(CONFIG_PATH, JSON.stringify(newConfig, null, 2) + "\n", "utf-8");
-
-      ctx.ui.notify(
+      // autoCommit preference
+      const commitChoice = await showInitMenu(ctx, "ag:init — Auto-commit",
+        "Automatically commit after every agent/charter write?",
         [
-          `✓ Workspace configured: ${resolved}`,
-          `  autoCommit: ${newConfig.autoCommit}`,
-          `  Run /reload to activate.`,
-        ].join("\n"),
+          { value: "on",  label: "Yes — auto-commit", description: "Every write creates a conventional-commit with a derived message" },
+          { value: "off", label: "No — manual only",  description: "You commit to the workspace repo yourself" },
+        ],
+      );
+      if (commitChoice === null) { ctx.ui.notify("Cancelled.", "info"); return; }
+
+      // Write config
+      const newConfig = { workspace: rawPath.trim(), autoCommit: commitChoice === "on" };
+      writeFileSync(CONFIG_PATH, JSON.stringify(newConfig, null, 2) + "\n", "utf-8");
+      ctx.ui.notify(
+        [`✓ Workspace: ${resolved}`, `  autoCommit: ${newConfig.autoCommit}`, `  Run /reload to activate.`].join("\n"),
         "info",
       );
     },
