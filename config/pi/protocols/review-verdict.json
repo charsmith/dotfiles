@@ -1,0 +1,39 @@
+{
+  "name": "review-verdict",
+  "description": "Structured review pass/fail verdict for cli-builder-team reviewer step. Return this schema when the coordinator requests a review decision.",
+  "schema": {
+    "type": "object",
+    "required": ["verdict", "items"],
+    "properties": {
+      "verdict": {
+        "type": "string",
+        "enum": ["PASS", "FAIL"],
+        "description": "Overall verdict: PASS proceeds to Docs, FAIL triggers loop-back."
+      },
+      "items": {
+        "type": "array",
+        "description": "Individual checklist items.",
+        "items": {
+          "type": "object",
+          "required": ["status", "description"],
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": ["PASS", "FAIL", "WARN"],
+              "description": "PASS = ok, FAIL = blocking, WARN = noted but not blocking."
+            },
+            "description": {
+              "type": "string",
+              "description": "What was checked and what was found."
+            },
+            "step_to_fix": {
+              "type": ["integer", "null"],
+              "enum": [1, 2, 3, null],
+              "description": "Step number to loop back to for a FAIL: 1=plan, 2=test, 3=implement. Null for PASS/WARN."
+            }
+          }
+        }
+      }
+    }
+  }
+}
