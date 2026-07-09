@@ -1,18 +1,17 @@
 ---
 name: kb
 description: >
-  Query frontmatter and body content from the dp-knowledge-base using the `kb`
-  CLI. Use for listing tools/research/docs entries, filtering by frontmatter
-  field (exact, substring, or regex operators), reading individual entries
-  (frontmatter + body preview), navigating entry structure (outline, section,
-  files), fetching single field values, inspecting app identity/ownership/status
-  profiles, browsing schema and value distributions, finding entries with
-  missing fields, and viewing security hardening posture via `kb readiness`.
-  Brainstorm subdirectories are fully supported alongside flat .md files.
-  Supports named search aliases (e.g. `apex`, `ddx`) that expand into filter
-  expressions. Prefer `kb` over reading vault files directly.
-  `kb grep` requires ripgrep (`brew install ripgrep`). `kb read` and `kb app`
-  without a name argument require fzf (`brew install fzf`).
+  Query and navigate the dp-knowledge-base using the `kb` CLI. Covers listing,
+  filtering (exact/substring/regex), reading entries, outline/section navigation,
+  single-field lookup, app profiles, schema/value inspection, security readiness
+  grids (`kb readiness`), structured assessments (`kb assess`), concept explanations
+  (`kb explain`), and docs browsing (`kb doc`). Also scaffolds new entries
+  with SPEC-live frontmatter (`kb new`) and opens entries in $EDITOR
+  (`kb edit`). Supports alias CRUD (`kb alias`), spinnaker_app_name fallback
+  resolution, brainstorm subdirectories, brainstorm-to-research promotion
+  (`kb brainstorm promote`), and cross-file header outlines (`kb summary`).
+  Prefer `kb` over reading vault files directly.
+  Requires: ripgrep for `kb grep`, fzf for interactive selection.
 compatibility: kb CLI (uv tool install --editable .), dp-knowledge-base vault
 metadata:
   owners:
@@ -30,10 +29,11 @@ allowed-tools:
 
 # kb — dp-knowledge-base CLI
 
-`kb` is a personal CLI for querying the dp-knowledge-base vault. It reads YAML
-frontmatter (and a header-convention fallback for `docs/`) from Markdown files
-and lets you list, filter, read, audit, and navigate entries. Set `KB_ROOT` to
-override the default vault path (`/Users/charsmith/Documents/the_vault/dp-knowledge-base`).
+`kb` is a personal CLI for querying and maintaining the dp-knowledge-base vault.
+It reads YAML frontmatter (and a header-convention fallback for `docs/`) from
+Markdown files and lets you list, filter, read, audit, navigate, scaffold
+(`kb new`), and edit (`kb edit`) entries. Set `KB_ROOT` to override the default
+vault path (`/Users/charsmith/Documents/the_vault/dp-knowledge-base`).
 
 ## Quick Reference
 
@@ -83,12 +83,82 @@ kb aliases                       # show all configured aliases
 kb missing cloned
 kb missing date --dir research --json
 
+# ── Scaffold / edit ───────────────────────────────────────────────────────────
+kb new tool myservice                # tools/myservice/overview.md, SPEC-live frontmatter
+kb new research some-topic           # research/some-topic/some-topic.md
+kb new doc --template-only           # print docs/SPEC.md's blank frontmatter block
+kb new tool myservice --open         # create, then open in $EDITOR
+kb new tool myservice --force        # overwrite existing entry
+kb edit ablaze                       # open tools/ablaze/overview.md in $EDITOR
+kb edit ablaze --file security       # open tools/ablaze/security.md
+
 # ── Security readiness ──────────────────────────────────────────────────────
 kb readiness                         # fleet view: all tools with security.md
 kb readiness maestro                 # single service panel
 kb readiness --ring 0                # Ring 0 tools only
 kb readiness apex                    # filter by alias
 kb readiness --json                  # machine-readable
+
+# ── Open in Obsidian (macOS only) ────────────────────────────────────────────
+kb doc blast-radius-guide --open     # open vault file; prints nothing
+kb read spinnaker --plain --open     # print, then open
+kb app maestro --open                # open tool's overview.md
+kb readiness maestro --open          # open security.md (single service only)
+kb explain l1 --open                 # open source doc
+
+# ── Brainstorm ───────────────────────────────────────────────────────────────────────
+kb brainstorm promote deep-dive          # copy brainstorm → research/, write lineage frontmatter
+kb brainstorm promote deep-dive --dry-run
+kb brainstorm promote quick-idea --json  # {source, dest, kind, files_copied, status, message}
+
+# ── Summary ────────────────────────────────────────────────────────────────────────────
+kb summary project-x --dir brainstorm    # H1/H2 outline across all .md files in subdir
+kb summary project-x --dir brainstorm --json  # [{"file": "...", "headers": [...]}]
+
+# ── Alias CRUD ──────────────────────────────────────────────────────────────────────
+kb alias list                            # rich table of all aliases
+kb alias list --kind org                 # filter by kind: org|filter|entry
+kb alias list --json
+kb alias show infra                      # full detail: expansion, kind, desc
+kb alias add myalias 'language=java'     # add filter alias
+kb alias add infra 'dp_org_owner:infra' --kind org --desc 'Infra team'
+kb alias add infra 'new-expansion' --force
+kb alias rm myalias                      # remove alias
+kb alias rm myalias --dry-run
+kb alias edit java --desc 'Java microservices'
+kb alias edit java --expansion 'language=kotlin'
+
+# ── Clone / pull repos ───────────────────────────────────────────────────────
+kb clone myservice               # clone repo: URL → KB_REPOS_ROOT/<slug>, patch cloned:
+kb clone --all                   # clone all tools with repo: but no cloned:
+kb clone --all --dry-run         # preview what would be cloned
+kb pull myservice                # git pull in the cloned directory
+kb pull --all                    # pull all cloned tools
+
+# ── pt integration ───────────────────────────────────────────────────────────
+kb pt maestro posture                # thin passthrough to `pt app <spin> posture`
+kb report maestro --refresh          # regenerate cached pt report, then display
+kb report maestro                    # view cached report (or "No report cached")
+
+# ── Sessions ─────────────────────────────────────────────────────────────────
+export KB_SESSION=$(kb session start --name mywork)  # start session, capture branch
+kb session list                      # list open sessions (branch, changes, age)
+kb session status                    # KB-semantic view of changed entries
+kb session diff                      # full diff vs main for active session
+kb session diff mywork               # diff for named session
+kb session commit "batch update"     # merge to main + clean up worktree + branch
+kb session abort                     # discard session without merging
+
+# ── Vault status / history ───────────────────────────────────────────────────
+kb status                            # active session + dirty files + last commit
+kb log maestro                       # full commit history for an entry
+kb log maestro --field type          # only commits that changed 'type'
+kb log --dir research --since 2025-01-01 --json
+
+# ── Security assessments ─────────────────────────────────────────────────────
+kb assess maestro l1 pass "Deploy pipeline has canary + rollback gate"
+kb assess maestro icfd compliant "ICFD review passed 2025-06-01" --dry-run
+kb assess maestro l4 warning "Rate-limit present but no per-user cap" --json
 ```
 
 ## Commands
@@ -108,7 +178,7 @@ Lists all entries in a knowledge-base directory. Defaults: `--dir tools`.
 | `tools` | `service`, `category`, `type`, `cloned`, `language`, `team` |
 | `research` | path, `question`, `date`, `audience`, `sources` |
 | `docs` | path, `title`, `date` (header-convention fallback) |
-| `brainstorm` | path + all frontmatter keys present (flat `.md` files **and** named subdirectories — same primary-file precedence as research: `overview.md` → `<dirname>.md` → first alphabetically) |
+| `brainstorm` | path + all frontmatter keys present + `file_count` (flat `.md` files **and** named subdirectories — same primary-file precedence as research: `overview.md` → `<dirname>.md` → first alphabetically); supports frontmatter filtering with `=`, `~`, `:` operators |
 
 **Example — tools JSON (one entry):**
 ```json
@@ -171,6 +241,179 @@ kb search team:Orchestration               # regex
 kb search apex                             # alias
 kb search category=deployment team=delivery --json
 kb search audience=engineers --dir research
+kb search status=active --dir brainstorm   # brainstorm frontmatter filtering
+```
+
+---
+
+### `kb brainstorm promote`
+
+```
+kb brainstorm promote <name> [--dry-run] [--json]
+```
+
+Copies a brainstorm entry (flat `.md` file **or** subdirectory) to `research/`, writing
+bidirectional lineage frontmatter in both directions. **Non-destructive** — the source
+brainstorm entry is never deleted. Session-aware: writes to the active session’s worktree
+when one is active.
+
+**Frontmatter written:**
+
+| File | Field added |
+|------|-------------|
+| Destination (`research/<name>`) primary file | `promoted_from: brainstorm/<name>` |
+| Source (`brainstorm/<name>`) primary file | `promoted_to: research/<name>` |
+
+Primary file selection order inside a directory: `overview.md` → `<name>.md` → first
+alphabetically.
+
+**`--json` shape (`PromoteResult`):**
+```json
+{
+  "source": "brainstorm/deep-dive",
+  "dest": "research/deep-dive",
+  "kind": "dir",
+  "files_copied": 3,
+  "status": "promoted",
+  "message": "Promoted brainstorm/deep-dive → research/deep-dive (3 file(s) copied)."
+}
+```
+
+**`status` values:** `"promoted"` · `"dry_run"` · `"not_found"`  
+**`kind` values:** `"dir"` (subdir entry) · `"flat"` (single `.md` file)
+
+```bash
+kb brainstorm promote deep-dive            # promote subdir entry
+kb brainstorm promote quick-idea           # promote flat .md file
+kb brainstorm promote deep-dive --dry-run  # preview without writing
+kb brainstorm promote quick-idea --json    # structured output
+```
+
+---
+
+### `kb summary`
+
+```
+kb summary <name> [--dir brainstorm] [--json] [--plain]
+```
+
+Displays an H1/H2 header outline concatenated across **all** `.md` files in a brainstorm
+subdirectory, prefixed by filename. For a flat file entry, equivalent to `kb outline`.
+Only `--dir brainstorm` is currently implemented; other directories exit 1.
+
+Default output is a Rich table (file → headers). `--plain` gives tab-separated
+`file\theader` pairs (pipeable). `--json` returns a list of objects.
+
+**`--json` shape:**
+```json
+[
+  {"file": "overview.md", "headers": ["# Overview", "## Background", "## Goals"]},
+  {"file": "notes.md",    "headers": ["# Notes", "## Open Questions"]}
+]
+```
+
+```bash
+kb summary project-x --dir brainstorm            # rich table
+kb summary project-x --dir brainstorm --json     # [{"file": ..., "headers": [...]}]
+kb summary project-x --dir brainstorm --plain    # file\theader (pipeable)
+```
+
+---
+
+### `kb alias`
+
+Full CRUD for named aliases stored in `kb.yaml`. Distinct from the read-only
+`kb aliases` command (which just lists them). Changes are written to `kb.yaml` immediately.
+
+#### `kb alias list`
+
+```
+kb alias list [--kind org|filter|entry] [--json]
+```
+
+Rich table of all aliases. `--kind` narrows to one category. `--json` returns a list of
+alias objects.
+
+```bash
+kb alias list
+kb alias list --kind org
+kb alias list --kind filter --json
+```
+
+#### `kb alias show`
+
+```
+kb alias show <name> [--json]
+```
+
+Full detail for a single alias: expansion string, kind, description. Exits 1 if the alias
+doesn’t exist.
+
+```bash
+kb alias show infra
+kb alias show apex --json
+```
+
+#### `kb alias add`
+
+```
+kb alias add <name> <expansion> [--kind filter] [--desc "..."] [--force] [--json]
+```
+
+Adds a new alias to `kb.yaml`. `<expansion>` is a filter expression
+(e.g. `language=java` or `dp_org_owner:"Analytics Platform"`). `--force` overwrites an
+existing alias with the same name. Exits 1 if the alias already exists and `--force` is
+not given.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--kind` | `filter` | Alias kind: `org`, `filter`, `entry` |
+| `--desc` | `` | Human-readable description |
+| `--force` | false | Overwrite existing alias |
+| `--json` | false | Emit the created `AliasEntry` as JSON |
+
+**`--json` shape:**
+```json
+{"name": "myalias", "expansion": "language=java", "kind": "filter", "desc": "Java services"}
+```
+
+```bash
+kb alias add myalias 'language=java'
+kb alias add infra 'dp_org_owner:infra-team' --kind org --desc 'Infra team'
+kb alias add infra 'new-expansion' --force   # overwrite existing
+kb alias add myalias 'language=java' --json
+```
+
+#### `kb alias rm`
+
+```
+kb alias rm <name> [--dry-run] [--json]
+```
+
+Removes an alias from `kb.yaml`. Exits 1 if the alias doesn’t exist.
+`--dry-run` shows what would be removed without writing. `--json` returns
+`{"message": "..."}` on success.
+
+```bash
+kb alias rm myalias
+kb alias rm myalias --dry-run
+kb alias rm myalias --json
+```
+
+#### `kb alias edit`
+
+```
+kb alias edit <name> [--expansion <str>] [--kind <str>] [--desc <str>] [--json]
+```
+
+Edits one or more fields of an existing alias in-place. Only supplied options are changed;
+unspecified fields remain unchanged. Exits 1 if the alias doesn’t exist.
+
+```bash
+kb alias edit java --desc 'Java microservices'
+kb alias edit java --expansion 'language=kotlin'
+kb alias edit java --kind entry
+kb alias edit java --expansion 'language=groovy' --desc 'Groovy too' --json
 ```
 
 ---
@@ -178,12 +421,13 @@ kb search audience=engineers --dir research
 ### `kb app`
 
 ```
-kb app [NAME] [--json] [--plain]
+kb app [NAME] [--json] [--plain] [--open]
 ```
 
 Displays a structured profile for a tool entry in three panels. Only searches
 the `tools` directory. When `NAME` is omitted, launches **fzf** for interactive
 selection (requires `brew install fzf`).
+`--open` opens the tool's `overview.md` in Obsidian (macOS only).
 
 **Panels:**
 
@@ -220,17 +464,20 @@ selection (requires `brew install fzf`).
 ### `kb read`
 
 ```
-kb read <name> [--dir tools|research|docs] [--json] [--plain]
+kb read <name> [--dir tools|research|docs] [--json] [--plain] [--open]
 ```
 
 Prints frontmatter as YAML followed by up to 60 lines of the entry body.
 `<name>` is the directory name (tools/research) or filename stem (docs).
 Exits non-zero if the entry is not found. When `NAME` is omitted, launches
 **fzf** for interactive selection (requires `brew install fzf`).
+`--open` opens the vault file in Obsidian (macOS only).
 
 ```bash
 kb read spinnaker
 kb read maestro --dir research
+kb read spinnaker --open            # open in Obsidian (prints nothing)
+kb read spinnaker --plain --open    # print, then open
 ```
 
 **Example output:**
@@ -280,16 +527,18 @@ kb outline maestro --json        # JSON list of {level, text} objects
 ### `kb section`
 
 ```
-kb section <name> <header> [--dir tools|research|docs] [--json]
+kb section <name> <header> [--dir tools|research|docs] [--json] [--open]
 ```
 
 Prints the body of the first section whose heading contains `<header>` as a
 substring (case-insensitive). The section runs from the matched heading to the
 next heading at the same or higher level.
+`--open` opens the vault file in Obsidian (macOS only).
 
 ```bash
 kb section maestro "Auth"        # section whose heading contains "Auth"
 kb section maestro overview --json
+kb section maestro "Auth" --open # open vault file in Obsidian
 ```
 
 ---
@@ -502,10 +751,10 @@ kb aliases --json
 | Alias | Expands to |
 |-------|-----------|
 | `apex` | `dp_org_owner~"Analytics Platform"` |
-| `bdo` | `dp_org_owner~BDO` |
-| `ddx` | `dp_org_owner~DDX` |
-| `engines` | `dp_org_owner~"Engines and DSI"` |
-| `lakehouse` | `dp_org_owner~Lakehouse` |
+| `bdo` | `team~"BDO"` |
+| `ddx` | `team~"DDX"` |
+| `engines` | `team~"Engines"` |
+| `lakehouse` | `team~"Lakehouse"` |
 
 ---
 
@@ -523,6 +772,148 @@ kb missing cloned
 kb missing date --dir research --json
 kb missing title --dir docs
 kb missing cloned --plain | wc -l
+```
+
+---
+
+### `kb new`
+
+```
+kb new <kind> [<name>] [--template-only] [--open] [--force] [--json]
+```
+
+Scaffolds a new SPEC-compliant entry. `<kind>` is one of `tool`, `research`,
+`doc`, `brainstorm`. Frontmatter is generated **live** from the target kind's
+`SPEC.md` `## Frontmatter Schema` block — there is no hardcoded schema in
+Python, so it always reflects the current SPEC. Session-aware: writes to the
+active session's worktree when one is active (commit deferred to
+`kb session commit`); otherwise writes directly to the vault and auto-commits.
+
+**Target paths per kind:**
+
+| Kind | Target path | Frontmatter | Body |
+|------|-------------|--------------|------|
+| `tool` | `tools/<name>/overview.md` | live from `tools/SPEC.md` | one-line description placeholder |
+| `research` | `research/<name>/<name>.md` | live from `research/SPEC.md` | `## Question` / `## Findings` / `## See Also` |
+| `doc` | `docs/<name>.md` | live from `docs/SPEC.md` | headers from `docs/SPEC.md`'s `## Body Format` block |
+| `brainstorm` | `brainstorm/<name>.md` | **none** — brainstorm has no `SPEC.md` | minimal `# <name>` |
+
+`--template-only` prints the blank frontmatter block to stdout and writes
+nothing (`<name>` is optional in this mode — useful to see the current
+schema). `<name>` is required otherwise. `kb new` exits 1 if the target already exists (unless `--force` is given), or if `<name>` is missing without `--template-only`.
+
+```bash
+kb new tool myservice                    # tools/myservice/overview.md
+kb new research some-topic               # research/some-topic/some-topic.md
+kb new doc onboarding-v2                 # docs/onboarding-v2.md
+kb new brainstorm pipeline-idea          # brainstorm/pipeline-idea.md, no frontmatter
+
+kb new doc --template-only               # print docs/SPEC.md's blank frontmatter block
+kb new tool myservice --json             # {"kind","name","path","created":true}
+
+kb new tool myservice --open             # create, then open in $EDITOR
+kb new tool myservice --force            # overwrite if already exists
+
+# Inside a session — deferred commit
+export KB_SESSION=$(kb session start scaffold-work)
+kb new tool myservice
+kb session commit "add myservice scaffold"
+```
+
+---
+
+### `kb edit`
+
+```
+kb edit <name> [--file STEM] [--dir tools|research|docs|brainstorm]
+```
+
+Opens a resolved knowledge-base entry in `$EDITOR` (falls back to `vi` when
+unset). Resolution mirrors `kb read`/`kb patch --file`: fuzzy name matching
+(exact → prefix → contains), the `spinnaker_app_name` fallback, `--dir`
+(default `tools`), and `--file STEM` to target a specific `.md` file inside a
+tool/brainstorm directory instead of the default `overview.md`. Session-aware:
+edits the active session's worktree when one is active (commit deferred to
+`kb session commit`); otherwise commits directly to the vault — **only if the
+file's bytes actually changed** (a no-op edit is never committed).
+
+`kb edit` never creates files: if `<name>` (or `--file`) doesn't resolve to an
+existing entry, it exits 1 with a message suggesting the matching `kb new`
+invocation.
+
+```bash
+kb edit ablaze                           # edit tools/ablaze/overview.md
+kb edit ablaze --file security           # edit tools/ablaze/security.md
+kb edit onboarding --dir docs            # edit docs/onboarding.md
+kb edit some-topic --dir research        # edit research/some-topic/some-topic.md
+kb edit maestro-app-name                  # resolves via spinnaker_app_name fallback
+
+kb edit missing-thing                    # exits 1, suggests `kb new tool missing-thing`
+```
+
+---
+
+
+---
+
+### `kb clone`
+
+```
+kb clone [<name>] [--all] [--dir tools|research|docs] [--dry-run] [--json]
+```
+
+Clone the git repo recorded in a tool's `repo:` frontmatter field to
+`$KB_REPOS_ROOT/<slug>` (default `~/code/knowledge_base_repos`). After a
+successful clone, patches the entry's `cloned:` field with the local path and
+auto-commits (or defers to `kb session commit` when a session is active).
+
+Override the base directory with `KB_REPOS_ROOT`:
+```bash
+export KB_REPOS_ROOT=~/code/nflx
+```
+
+| Option | Description |
+|--------|-------------|
+| `<name>` | Entry name (fuzzy matched) |
+| `--all` | Clone all eligible entries that have `repo:` set but `cloned:` unset |
+| `--dir` | Vault sub-directory to scan (default `tools`) |
+| `--dry-run` | Show what would be cloned; writes nothing |
+| `--json` | `[{"name", "repo", "dest", "status", "message"}]` |
+
+**`status` values:** `"cloned"` · `"skipped"` (directory already exists) · `"error"` · `"dry-run"`
+
+```bash
+kb clone myservice               # clone single entry
+kb clone --all                   # bulk clone (skips already-cloned)
+kb clone --all --dry-run         # preview
+kb clone myservice --json
+kb clone --all --json
+```
+
+---
+
+### `kb pull`
+
+```
+kb pull [<name>] [--all] [--dir tools|research|docs] [--json]
+```
+
+Run `git pull` in the directory recorded in a tool's `cloned:` frontmatter.
+
+| Option | Description |
+|--------|-------------|
+| `<name>` | Entry name (fuzzy matched; must have `cloned:` set) |
+| `--all` | Pull every entry that has `cloned:` set |
+| `--dir` | Vault sub-directory to scan (default `tools`) |
+| `--json` | `[{"name", "path", "status", "summary"}]` |
+
+**`status` values:** `"updated"` · `"up-to-date"` · `"error"`
+
+```bash
+kb pull myservice
+kb pull --all
+kb pull myservice --json
+kb pull --all --json
 ```
 
 ---
@@ -554,6 +945,7 @@ kb app maestro --json | jq '.ownership'
 |------|-----------------------|---------|
 | **ripgrep** (`rg`) | `kb grep` | `brew install ripgrep` |
 | **fzf** | `kb read` (no name), `kb app` (no name) | `brew install fzf` |
+| **pt** | `kb pt`, `kb report --refresh` | `uv tool install --editable <pt-repo>` |
 
 ---
 
@@ -691,3 +1083,261 @@ export KB_ROOT=/path/to/dp-knowledge-base
 | Vault overview (session, dirty files, last commit) | `kb status` |
 | Audit field-change history for an entry | `kb log <name>` |
 | Filter history to one field | `kb log <name> --field <field>` |
+| Record a security assessment | `kb assess <name> <field> <value> "<evidence>"` |
+| Preview an assessment without writing | `kb assess ... --dry-run` |
+| Drill into one readiness field (evidence+date) | `kb readiness --level <field>` |
+| Look up a security concept | `kb explain <concept>` |
+| Browse or extract from a docs entry | `kb doc <name> [--front\|--url\|--outline\|--section\|--summary]` |
+| Open a vault file in Obsidian (macOS only) | `kb doc/read/app/section/explain/readiness <name> --open` |
+| Patch a non-overview file in a tool dir | `kb patch <name> <field>=<value> --file <stem>` |
+| Scaffold a new entry (SPEC-live frontmatter) | `kb new <kind> <name>` |
+| Scaffold and open in \$EDITOR | `kb new <kind> <name> --open` |
+| Overwrite an existing scaffold | `kb new <kind> <name> --force` |
+| Clone a tool's repo | `kb clone <name>` |
+| Bulk clone all tools | `kb clone --all` |
+| Pull updates in a cloned tool's repo | `kb pull <name>` |
+| Bulk pull all cloned tools | `kb pull --all` |
+| Preview a kind's blank frontmatter schema | `kb new <kind> --template-only` |
+| Open an entry in $EDITOR | `kb edit <name>` |
+| Edit a non-overview file in a tool dir | `kb edit <name> --file <stem>` |
+| Promote brainstorm entry to research | `kb brainstorm promote <name>` |
+| Preview a brainstorm promote | `kb brainstorm promote <name> --dry-run` |
+| H1/H2 outline across all files in a brainstorm subdir | `kb summary <name> --dir brainstorm` |
+| List / filter aliases in kb.yaml | `kb alias list [--kind org\|filter\|entry]` |
+| Show full alias detail | `kb alias show <name>` |
+| Add a new alias | `kb alias add <name> <expansion> [--kind filter]` |
+| Remove an alias | `kb alias rm <name>` |
+| Edit an alias in-place | `kb alias edit <name> [--expansion ...] [--desc ...]` |
+
+---
+
+## Layer 6 — Assessment Layer
+
+### `kb patch --file <stem>`
+
+```
+kb patch <name> <field>=<value> [--dir tools|research|docs] [--file STEM] [--dry-run] [--json]
+```
+
+`--file STEM` targets a specific `.md` file inside a tool directory instead of
+the default `overview.md`. All other patch semantics are unchanged.
+
+```bash
+kb patch maestro l1=pass --file security       # patches security.md in the maestro dir
+kb patch maestro icfd=compliant --file security
+kb patch maestro l1=pass --file security --dry-run
+```
+
+---
+
+### Name resolution: `spinnaker_app_name` fallback
+
+All name-matching commands (`read`, `app`, `get`, `patch`, `assess`, etc.)
+first try to match the vault directory name (exact → prefix → contains), then
+fall back to matching the `spinnaker_app_name` frontmatter field using the same
+priority order. This lets you reference tools by their Spinnaker app name when
+it differs from the directory name.
+
+---
+
+### `kb assess`
+
+Record a structured security assessment into a tool's `security.md` frontmatter.
+Validates field name and value. Auto-commits when no session is active.
+
+```
+kb assess <name> <field> <value> "<evidence>" [--dry-run] [--json]
+```
+
+**Assessable fields:**
+
+| Field | Allowed values |
+|-------|---------------|
+| `l1`–`l6` | `pass`, `warning`, `critical`, `fail`, `unassessed` |
+| `icfd` | `compliant`, `non-compliant`, `unassessed` |
+| `wfs_registered` | `true`, `false` |
+| `scrub_app_ingress` | `true`, `false` |
+
+```bash
+kb assess maestro l1 pass "Deploy pipeline has canary + rollback gate"
+kb assess maestro l3 critical "No per-query auth"
+kb assess maestro icfd compliant "ICFD review passed 2025-06-01" --dry-run
+kb assess maestro l4 warning "Rate-limit present but no per-user cap" --json
+```
+
+`--json` shape: `{"entry", "field", "old_value", "new_value", "assessed_at"}`
+
+**Agent rule:** if your task requires more than one `kb assess` call, start a
+session first to avoid partial commits landing on `main`.
+
+---
+
+### `kb readiness --level <field>`
+
+The `--level` flag drills into a single assessed field across all (or filtered)
+services, showing value, evidence text, and assessed date.
+
+```bash
+kb readiness --level l1           # fleet view: L1 value + evidence + date
+kb readiness --level icfd         # ICFD status across the fleet
+kb readiness maestro --level l3   # single service, L3 details
+kb readiness --ring 0 --level l4  # Ring 0 only, L4 details
+```
+
+Accepted `--level` values: `l1` `l2` `l3` `l4` `l5` `l6` `icfd`
+`wfs_registered` `scrub_app_ingress`
+
+---
+
+### `kb explain`
+
+Look up what a security concept requires, sourced from `concept_docs` in
+`tools/security-SPEC.md`. Case-insensitive; prefix matching supported.
+
+```
+kb explain <concept> [--json] [--plain] [--open]
+```
+
+`--plain` prints raw Markdown instead of Rich-rendered output.
+`--open` opens the referenced doc file in Obsidian (macOS only).
+
+```bash
+kb explain l1              # renders the L1 section from the referenced doc
+kb explain icfd            # explains the ICFD compliance requirement
+kb explain ring            # explains ring classification
+kb explain icfd --json     # {"concept": "icfd", "doc": "...", "section": "...", "body": "..."}
+kb explain l1 --plain      # raw Markdown output (pipeable)
+kb explain l1 --open       # open source doc in Obsidian (prints nothing)
+```
+
+Each `concept_docs` entry may include an optional `dir` key (default: `docs`) to resolve against a different vault directory — e.g. `dir: research` resolves against `research/<doc>/<doc>.md`.
+
+---
+
+### `kb doc`
+
+Fuzzy lookup of a `docs/` entry with optional views. Default renders the full
+document as Rich Markdown.
+
+```
+kb doc <name> [--front] [--text] [--url] [--outline] [--section <header>] [--summary]
+             [--json] [--plain] [--open] [--opendoc]
+```
+
+View flags are mutually exclusive (only one may be given at a time).
+
+| Flag | Effect |
+|------|--------|
+| `--front` | Print frontmatter YAML |
+| `--text` | Fetch the full document text from its external `source:` URL via `ns`; requires `ns` on `PATH` and a `source:` URL in frontmatter |
+| `--url` | Print the `source` URL (pipeable) |
+| `--outline` | Print the heading tree |
+| `--section <header>` | Print the first section matching `<header>` (case-insensitive substring) |
+| `--summary` | Extractive summary — first sentence per section |
+| `--json` | Machine-readable (format varies by flag) |
+| `--plain` | Raw Markdown output instead of Rich-rendered |
+| `--open` | Open the vault `.md` file in Obsidian (macOS only); combine with display flags to print first, then open |
+| `--opendoc` | Open the doc's `source:` URL in your default browser (macOS only; distinct from `--open` which opens the vault file in Obsidian) |
+
+```bash
+kb doc control-plane-hardening
+kb doc blast-radius-guide --url
+kb doc blast-radius-guide --front
+kb doc blast-radius-guide --outline
+kb doc blast-radius-guide --section "L2 Operator"
+kb doc blast-radius-guide --section "L2 Operator" --json
+kb doc control-plane-hardening --summary
+kb doc control-plane-hardening --plain      # raw Markdown (pipeable)
+kb doc blast-radius-guide --text            # fetch full text via ns from source URL
+kb doc blast-radius-guide --text --json     # {"text": "..."}
+kb doc blast-radius-guide --open            # open vault .md in Obsidian (prints nothing)
+kb doc blast-radius-guide --front --open    # print frontmatter, then open in Obsidian
+kb doc blast-radius-guide --opendoc        # open source URL in default browser
+```
+
+---
+
+## Layer 7 — pt Integration
+
+Wraps the `pt` security-audit CLI: a thin passthrough (`kb pt`) plus a cached,
+human-readable report (`kb report`) stored at `tools/<name>/report.md`.
+Requires `pt` on `PATH` — both commands exit 1 with an install hint when it's
+missing:
+
+```
+kb pt requires pt — install with: uv tool install --editable <pt-repo>
+kb report --refresh requires pt — install with: uv tool install --editable <pt-repo>
+```
+
+### `kb pt`
+
+Resolves `<name>` to `spinnaker_app_name` (same fuzzy matching + fallback as
+every other command) and execs `pt app <spinnaker-app-name> <subcommand>
+[args...]`, inheriting stdio and exit code — no output capture, no parsing.
+Unknown flags (`--json`, `--auth`, ...) pass straight through to `pt`.
+
+```
+kb pt <name> <subcommand> [args...]
+```
+
+```bash
+kb pt maestro posture
+kb pt databridge posture
+kb pt maestro config --auth --json
+kb pt maestro icfd
+```
+
+Missing `spinnaker_app_name` on the resolved entry exits 1 with:
+
+```
+No spinnaker_app_name for <name> — run kb patch <name> spinnaker_app_name=<value> to set it
+```
+
+### `kb report`
+
+Cached `pt` audit report at `tools/<name>/report.md`.  Five reader-question
+sections: **Identity & Ownership**, **Security Posture**, **Stability**,
+**Operational Health**, **Platform Compliance**.
+
+```
+kb report <name> [--refresh] [--wfs-full] [--age] [--open] [--json]
+```
+
+| Option | Effect |
+|--------|--------|
+| `--refresh` | Run `pt` fresh for all sections (`posture`, `icfd`, `wfs`, `config --auth`, `alerts`), atomically rewrite report.md, auto-commit |
+| `--wfs-full` | Show all 29 unpacked WFS categories; default collapses `MANAGEMENT_LEVEL_UNSPECIFIED` rows to a count line |
+| `--age` | Print only the cached age, e.g. `3h 14m ago` |
+| `--open` | Open report.md in Obsidian (macOS only) |
+| `--json` | Emit frontmatter as JSON (`{}` if no report cached) |
+
+**Staleness:**
+- No cached report → `No report cached — run kb report <name> --refresh`, exit 0.
+- Fresh (< 24h) → renders report + dim `generated N ago` footer.
+- Stale (≥ 24h) → renders report + yellow `Report is Nh old — run kb report <name> --refresh` warning.
+
+**Security Posture** signal differentiation:
+- CISA KEV CVE present → blockquote callout immediately after verdict.
+- `exploitable_cve_cnt > 0` → ❌ N exploitable CVE(s) bullet.
+- `uses_service_mesh=False` → ❌ bullet naming the missing controls (no circuit breaking, no mTLS via proxy).
+
+**Stability** (inserted between Security Posture and Operational Health) draws from three signals:
+- Alert events from `pt app <spin> alerts --json` — ❌ if any `Instances_Down` event.
+- ICFD `dep_update_health.pass_rate` — ❌ < 50 %, ⚠️ 50–79 %, ✅ ≥ 80 %.
+- ICFD `confidence.away_team` — ⚠️ if SOMEWHAT_DISAGREE or DISAGREE.
+
+**Platform Compliance (WFS)** unpacks the `MANAGEMENT_LEVELS` container into a
+`| Category | Status | Note |` table summarised as `N of 29 categories platform-managed`.
+Default view collapses unspecified rows; `--wfs-full` expands all 29.
+
+```bash
+kb report maestro                 # view cached report (or "No report cached")
+kb report maestro --refresh       # regenerate from a live pt run, then display
+kb report maestro --refresh --wfs-full  # expand all 29 WFS categories
+kb report maestro --age           # just the age
+kb report maestro --open          # open report.md in Obsidian
+kb report maestro --json          # frontmatter only
+```
+
+`kb app`'s Status panel shows `Last report: N ago (kb report <name>
+--refresh)` whenever a report.md is cached for that tool.
