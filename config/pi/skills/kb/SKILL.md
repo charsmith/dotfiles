@@ -139,6 +139,8 @@ kb pull --all                    # pull all cloned tools
 kb pt maestro posture                # thin passthrough to `pt app <spin> posture`
 kb report maestro --refresh          # regenerate cached pt report, then display
 kb report maestro                    # view cached report (or "No report cached")
+kb report maestro --verbose          # expand collapsed pass findings
+kb report maestro --plain            # tab-separated output, no ANSI (pipeable)
 
 # ── Sessions ─────────────────────────────────────────────────────────────────
 export KB_SESSION=$(kb session start --name mywork)  # start session, capture branch
@@ -1086,7 +1088,7 @@ export KB_ROOT=/path/to/dp-knowledge-base
 | Record a security assessment | `kb assess <name> <field> <value> "<evidence>"` |
 | Preview an assessment without writing | `kb assess ... --dry-run` |
 | Drill into one readiness field (evidence+date) | `kb readiness --level <field>` |
-| Look up a security concept | `kb explain <concept>` |
+| Look up a security concept or tool summary | `kb explain <concept>` or `kb explain <tool-name>` |
 | Browse or extract from a docs entry | `kb doc <name> [--front\|--url\|--outline\|--section\|--summary]` |
 | Open a vault file in Obsidian (macOS only) | `kb doc/read/app/section/explain/readiness <name> --open` |
 | Patch a non-overview file in a tool dir | `kb patch <name> <field>=<value> --file <stem>` |
@@ -1191,23 +1193,48 @@ Accepted `--level` values: `l1` `l2` `l3` `l4` `l5` `l6` `icfd`
 
 ### `kb explain`
 
-Look up what a security concept requires, sourced from `concept_docs` in
-`tools/security-SPEC.md`. Case-insensitive; prefix matching supported.
+Look up a security concept **or** get a quick summary of any tool entry.
+Prefer `kb explain <tool-name>` when you need a fast one-liner on what a tool
+does and who owns it — no need to run `kb app` for a full profile.
+
+Resolution is two-step:
+
+1. **Concept match** — looks up `<concept>` in `concept_docs` of
+   `tools/security-SPEC.md` (case-insensitive, prefix matching) and renders the
+   referenced doc/section.
+2. **Tool entry fallback** — if no concept matches, resolves `<concept>` as a
+   tool name (fuzzy + `spinnaker_app_name` fallback) and renders a compact blurb:
+   `type`, `team`, `owning_org`, `spinnaker_app_name`, and the first body paragraph.
+3. **Nothing found** → exits 1:
+   `Unknown concept or tool '<concept>'. Known concepts: …. Try kb app <name> for a full profile.`
 
 ```
 kb explain <concept> [--json] [--plain] [--open]
 ```
 
-`--plain` prints raw Markdown instead of Rich-rendered output.
-`--open` opens the referenced doc file in Obsidian (macOS only).
+`--plain` prints raw Markdown (concept) or tab-separated `name\ttype\tteam\tsummary` (tool).
+`--open` opens the source doc (concept) or `overview.md` (tool) in Obsidian (macOS only).
+
+**`--json` shape — concept match:**
+```json
+{"concept": "icfd", "doc": "...", "section": "...", "body": "..."}
+```
+
+**`--json` shape — tool match:**
+```json
+{"kind": "tool", "name": "metacat", "type": "service", "team": "...", "owning_org": "...", "spinnaker_app_name": "metacat", "summary": "..."}
+```
 
 ```bash
-kb explain l1              # renders the L1 section from the referenced doc
-kb explain icfd            # explains the ICFD compliance requirement
-kb explain ring            # explains ring classification
+kb explain l1              # concept doc — renders L1 section
+kb explain icfd            # concept doc — ICFD compliance requirement
+kb explain metacat         # tool fallback — compact blurb for the metacat tool
 kb explain icfd --json     # {"concept": "icfd", "doc": "...", "section": "...", "body": "..."}
-kb explain l1 --plain      # raw Markdown output (pipeable)
-kb explain l1 --open       # open source doc in Obsidian (prints nothing)
+kb explain metacat --json  # {"kind": "tool", "name": "metacat", ...}
+kb explain l1 --plain      # raw Markdown (pipeable)
+kb explain metacat --plain # name\ttype\tteam\tsummary (tab-separated)
+kb explain l1 --open       # open source doc in Obsidian
+kb explain metacat --open  # open tools/metacat/overview.md in Obsidian
 ```
 
 Each `concept_docs` entry may include an optional `dir` key (default: `docs`) to resolve against a different vault directory — e.g. `dir: research` resolves against `research/<doc>/<doc>.md`.
@@ -1299,17 +1326,33 @@ Cached `pt` audit report at `tools/<name>/report.md`.  Five reader-question
 sections: **Identity & Ownership**, **Security Posture**, **Stability**,
 **Operational Health**, **Platform Compliance**.
 
+**Console UX.** Renders a compact Rich terminal view — not a raw Markdown blob:
+
+- **Verdict panel** — colour-coded border (green ok / yellow warn / red fail),
+  roll-up status, and up to 3 top gaps.
+- **Identity strip** — one dim line under the panel.
+- **Section separators** with inline gap count: `── Security ──── 2 gap(s) ──`
+- **Per-finding colour** — `✗` red for fail/critical, `!` yellow for warn,
+  `✓` dim green for pass, `•` for info. Fixed 4-symbol vocab, no emoji.
+- **Pass collapse** — passes folded to `N check(s) passed` by default;
+  `--verbose` expands them.
+
+**Schema auto-refresh.** Stale v1 caches (predating the Stability renderer)
+auto-refresh when `pt` is available instead of silently dropping sections.
+
 ```
-kb report <name> [--refresh] [--wfs-full] [--age] [--open] [--json]
+kb report <name> [--refresh] [--verbose] [--plain] [--wfs-full] [--age] [--open] [--json]
 ```
 
 | Option | Effect |
 |--------|--------|
 | `--refresh` | Run `pt` fresh for all sections (`posture`, `icfd`, `wfs`, `config --auth`, `alerts`), atomically rewrite report.md, auto-commit |
+| `--verbose`, `-v` | Expand collapsed pass findings; default folds passes to one dim summary line per section |
+| `--plain` | No ANSI/Rich markup — emit `status\tlabel\tdetail` tab-separated rows (pipe-friendly) |
 | `--wfs-full` | Show all 29 unpacked WFS categories; default collapses `MANAGEMENT_LEVEL_UNSPECIFIED` rows to a count line |
 | `--age` | Print only the cached age, e.g. `3h 14m ago` |
 | `--open` | Open report.md in Obsidian (macOS only) |
-| `--json` | Emit frontmatter as JSON (`{}` if no report cached) |
+| `--json` | Emit frontmatter + `verdict` ("ok"\|"warn"\|"fail") + `sections: [{title, status}]` as JSON; `{}` if no report cached |
 
 **Staleness:**
 - No cached report → `No report cached — run kb report <name> --refresh`, exit 0.
@@ -1318,25 +1361,35 @@ kb report <name> [--refresh] [--wfs-full] [--age] [--open] [--json]
 
 **Security Posture** signal differentiation:
 - CISA KEV CVE present → blockquote callout immediately after verdict.
-- `exploitable_cve_cnt > 0` → ❌ N exploitable CVE(s) bullet.
-- `uses_service_mesh=False` → ❌ bullet naming the missing controls (no circuit breaking, no mTLS via proxy).
+- `exploitable_cve_cnt > 0` → ✗ N exploitable CVE(s) bullet.
+- `uses_service_mesh=False` → ✗ bullet naming the missing controls (no circuit breaking, no mTLS via proxy).
 
 **Stability** (inserted between Security Posture and Operational Health) draws from three signals:
-- Alert events from `pt app <spin> alerts --json` — ❌ if any `Instances_Down` event.
-- ICFD `dep_update_health.pass_rate` — ❌ < 50 %, ⚠️ 50–79 %, ✅ ≥ 80 %.
-- ICFD `confidence.away_team` — ⚠️ if SOMEWHAT_DISAGREE or DISAGREE.
+- Alert events from `pt app <spin> alerts --json` — state-aware: ✗ if any alert is currently firing (`state: "alerting"`); ! if any recovered within the last 24 h; • info if all recovered >24 h ago; ✓ pass if no events.
+- ICFD `dep_update_health.pass_rate` — ✗ < 50 %, ! 50–79 %, ✓ ≥ 80 %.
+- ICFD `confidence.away_team` — ! if SOMEWHAT_DISAGREE or DISAGREE.
+
+**Reliability alert signal** (used in the console `Reliability` section, distinct from the report.md Stability section above):
+- `✗` **fail** — any alert with `state: "alerting"` (currently firing)
+- `!` **warn** — recovered within 24 h (`state: "ok"`)
+- `•` **info** — all alerts resolved >24 h ago; label: `N alert events — all resolved`
+- `✓` **pass** — no alert events
+
+`--verbose` / `-v` adds per-active-alert findings (name, group, `triggered Xm ago`) plus top-3 recovered types (`N × Alert_Name  all resolved`) and most recent recovery age. The lead alert finding carries a dim drill-down hint: `kb pt <name> alerts`.
 
 **Platform Compliance (WFS)** unpacks the `MANAGEMENT_LEVELS` container into a
 `| Category | Status | Note |` table summarised as `N of 29 categories platform-managed`.
 Default view collapses unspecified rows; `--wfs-full` expands all 29.
 
 ```bash
-kb report maestro                 # view cached report (or "No report cached")
-kb report maestro --refresh       # regenerate from a live pt run, then display
+kb report maestro                     # view cached report (or "No report cached")
+kb report maestro --refresh           # regenerate from a live pt run, then display
+kb report maestro --verbose           # expand collapsed pass findings
+kb report maestro --plain             # tab-separated, no ANSI (pipeable)
 kb report maestro --refresh --wfs-full  # expand all 29 WFS categories
-kb report maestro --age           # just the age
-kb report maestro --open          # open report.md in Obsidian
-kb report maestro --json          # frontmatter only
+kb report maestro --age               # just the age
+kb report maestro --open              # open report.md in Obsidian
+kb report maestro --json              # verdict + section roll-up as JSON
 ```
 
 `kb app`'s Status panel shows `Last report: N ago (kb report <name>
