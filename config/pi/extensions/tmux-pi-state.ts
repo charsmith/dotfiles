@@ -22,14 +22,19 @@ export default function (pi: ExtensionAPI) {
 
   if (!windowId) return;
 
+  function tmuxExec(cmd: string): void {
+    try {
+      execSync(cmd, { stdio: "ignore" });
+    } catch {
+      // Silently ignore — tmux pane may have closed.
+    }
+  }
+
   // Nerd Font rounded pill caps (U+E0B6 left, U+E0B4 right)
   const lc = "\uE0B6";
   const rc = "\uE0B4";
-  // window_name is passed to window-icon.sh so it can detect subagent windows
-  // (names starting with "pi:") without needing tmux user-option lookups.
-  // U+315B (Hangul YO) has a horizontal bar with two strokes rising from it —
-  // a natural upside-down π. Coincidentally U+3160 (Hangul YU) looks like π itself.
-  const icon = "#(~/.config/tmux/scripts/window-icon.sh #{pane_pid} #{pane_current_command} #{window_name})";
+  // Pass #{window_name} and #{@pi_running} so window-icon.sh can use its fast paths.
+  const icon = "#(~/.config/tmux/scripts/window-icon.sh #{pane_pid} #{pane_current_command} #{window_name} #{@pi_running})";
 
   function pillFmt(color: string): string {
     return (
@@ -40,41 +45,36 @@ export default function (pi: ExtensionAPI) {
   }
 
   function setPill(color: string): void {
-    try {
-      execSync(
-        `tmux set-window-option -t ${windowId} window-status-format ${JSON.stringify(pillFmt(color))}` +
-        ` && tmux refresh-client -S`,
-        { stdio: "ignore" }
-      );
-    } catch {
-      // Silently ignore — tmux pane may have closed.
-    }
+    tmuxExec(
+      `tmux set-window-option -t ${windowId} window-status-format ${JSON.stringify(pillFmt(color))}` +
+      ` && tmux refresh-client -S`
+    );
   }
 
   function revertPill(): void {
-    try {
-      execSync(
-        `tmux set-window-option -ut ${windowId} window-status-format 2>/dev/null || true` +
-        ` ; tmux refresh-client -S`,
-        { stdio: "ignore" }
-      );
-    } catch {
-      // Silently ignore.
-    }
+    tmuxExec(
+      `tmux set-window-option -ut ${windowId} window-status-format 2>/dev/null || true` +
+      ` ; tmux refresh-client -S`
+    );
   }
 
-  // Green while the agent is working.
+  // Mark this window as a pi session so window-icon.sh can return the π icon
+  // instantly (same as the nvim fast-path) without any ps tree walk.
+  tmuxExec(`tmux set-window-option -t ${windowId} @pi_running 1`);
+
+  // Green pill while the agent is working; revert to theme default otherwise.
+  // Only window-status-format (inactive windows) is touched — catppuccin's
+  // window-status-current-format (active/focused window) is left alone.
   pi.on("agent_start", () => {
     setPill("#A6E3A1");
   });
 
-  // Back to theme default when the agent finishes a turn.
   pi.on("agent_end", () => {
     revertPill();
   });
 
-  // Also revert on shutdown (e.g. Ctrl-C while idle).
   pi.on("session_shutdown", () => {
+    tmuxExec(`tmux set-window-option -ut ${windowId} @pi_running`);
     revertPill();
   });
 }

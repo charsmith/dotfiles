@@ -10,14 +10,46 @@
   },
   "pathAccess": {
     "allowedPaths": [
-      { "kind": "directory", "path": "~/code" },
-      { "kind": "directory", "path": "~/.dotfiles" },
-      { "kind": "directory", "path": "~/.config" },
-      { "kind": "directory", "path": "/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/examples" },
-      { "kind": "directory", "path": "/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent" },
-      { "kind": "file",      "path": "/dev/null" },
-      { "kind": "directory", "path": "/tmp" },
-      { "kind": "directory", "path": "/var/folders/dg" }
+      {
+        "kind": "directory",
+        "path": "~/code"
+      },
+      {
+        "kind": "directory",
+        "path": "~/.dotfiles"
+      },
+      {
+        "kind": "directory",
+        "path": "~/.config"
+      },
+      {
+        "kind": "directory",
+        "path": "/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/examples"
+      },
+      {
+        "kind": "directory",
+        "path": "/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent"
+      },
+      {
+        "kind": "file",
+        "path": "/dev/null"
+      },
+      {
+        "kind": "directory",
+        "path": "/tmp"
+      },
+      {
+        "kind": "directory",
+        "path": "/var/folders/dg"
+      },
+      {
+        "kind": "directory",
+        "path": "~/Documents/the_vault"
+      },
+      {
+        "kind": "directory",
+        "path": "~/Documents/the_vault/dp-knowledge-base"
+      }
     ]
   },
   "version": "0.13.0-20260619"
