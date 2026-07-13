@@ -38,8 +38,14 @@ export default function (pi: ExtensionAPI) {
           unsubBranch();
         },
         invalidate() {},
-        render(_width: number): string[] {
-          return [buildStatusBar(ctx, footerData.getGitBranch())];
+        render(width: number): string[] {
+          try {
+            return [buildStatusBar(ctx, footerData.getGitBranch(), width)];
+          } catch {
+            // Never let a footer bug take down the whole session — fall back
+            // to a minimal, guaranteed-safe line rather than throwing.
+            return [""];
+          }
         },
       };
     });
@@ -52,7 +58,13 @@ export default function (pi: ExtensionAPI) {
 
   // ─── Render ────────────────────────────────────────────────────────────────
 
-  function buildStatusBar(ctx: ExtensionContext, gitBranch: string | null): string {
+  function buildStatusBar(ctx: ExtensionContext, gitBranch: string | null, width: number): string {
+    // Leave a 1-column safety margin — some terminals/renderers treat an
+    // exact-width line as an overflow (this caused hard crashes previously).
+    const budget = Math.max(0, (Number.isFinite(width) && width > 0 ? width : 158) - 1);
+    let visibleLen = 0;
+    const truncate = (s: string, max: number): string =>
+      s.length > max ? (max <= 1 ? s.slice(0, max) : `${s.slice(0, max - 1)}\u2026`) : s;
     // Catppuccin Mocha RGB values (same as statusline-command.sh)
     const _surface0 = "49;50;68";
     const _peach    = "250;179;135";
@@ -122,53 +134,85 @@ export default function (pi: ExtensionAPI) {
     };
 
     // ── Assemble pill segments ─────────────────────────────────────────────
+    // Every segment tracks its own *visible* (non-ANSI) width against
+    // `budget` so the assembled line can never overflow the terminal width
+    // (an overflow previously crashed the whole pi renderer with no error).
     let out = "";
     let prev = _surface0;
 
-    // Opening rounded cap — fg:surface0, no bg (left pill edge)
-    out += `${fg(_surface0)}${cap_open}`;
+    // addSeg: appends styled text but only if `visibleText` fits in the
+    // remaining budget. Returns true if the segment was added.
+    const addSeg = (styled: string, visibleText: string): boolean => {
+      if (visibleLen + visibleText.length > budget) return false;
+      out += styled;
+      visibleLen += visibleText.length;
+      return true;
+    };
 
-    // Segment 1: os icon + username
-    out += `${fg_bg(_surface0, _text)}${os_icon} charsmith `;
+    // Opening rounded cap — fg:surface0, no bg (left pill edge). Glyph is a
+    // single visible column.
+    addSeg(`${fg(_surface0)}${cap_open}`, " ");
 
-    // Segment 2: directory
-    out += `${fg_bg(_peach, _surface0)}${arrow}`;
-    out += `${fg(_mantle)} ${shortDir} `;
-    prev = _peach;
+    // Segment 1: os icon + username — always shown, always short.
+    {
+      const text = `${os_icon} charsmith `;
+      addSeg(`${fg_bg(_surface0, _text)}${text}`, text);
+    }
 
-    // Segment 3: git branch (optional)
+    // Segment 2: directory — truncate to fit if the budget is tight.
+    {
+      const remaining = budget - visibleLen;
+      const dirText = ` ${truncate(shortDir, Math.max(0, remaining - 3))} `; // -3 for arrow+padding
+      if (addSeg(`${fg_bg(_peach, _surface0)}${arrow}${fg(_mantle)}${dirText}`, `${arrow}${dirText}`)) {
+        prev = _peach;
+      }
+    }
+
+    // Segment 3: git branch (optional) — the variable-length segment most
+    // likely to overflow (charter run branch names embed a full task path).
+    // Truncate it to whatever's left rather than dropping other segments.
     if (gitBranch) {
-      out += `${fg_bg(_green, prev)}${arrow}`;
-      out += `${fg(_base)} ${git_icon} ${gitBranch}${gitDirty ? " !? " : " "}`;
-      prev = _green;
+      const suffix = gitDirty ? " !? " : " ";
+      const remaining = budget - visibleLen - `${arrow} ${git_icon} `.length - suffix.length;
+      if (remaining > 0) {
+        const branchText = truncate(gitBranch, remaining);
+        const visible = `${arrow} ${git_icon} ${branchText}${suffix}`;
+        if (addSeg(`${fg_bg(_green, prev)}${arrow}${fg(_base)} ${git_icon} ${branchText}${suffix}`, visible)) {
+          prev = _green;
+        }
+      }
     }
 
-    // Segment 4: model (optional)
+    // Segment 4: model (optional) — dropped entirely if there's no room.
     if (model) {
-      out += `${fg_bg(_teal, prev)}${arrow}`;
-      out += `${fg(_base)} ${model} `;
-      prev = _teal;
+      const text = ` ${model} `;
+      if (addSeg(`${fg_bg(_teal, prev)}${arrow}${fg(_base)}${text}`, `${arrow}${text}`)) {
+        prev = _teal;
+      }
     }
 
-    // Segment 5: context % (optional)
+    // Segment 5: context % (optional) — dropped entirely if there's no room.
     if (usedPct !== null) {
-      out += `${fg_bg(_blue, prev)}${arrow}`;
-      out += `${fg(_base)} ctx:${usedPct}% `;
-      prev = _blue;
+      const text = ` ctx:${usedPct}% `;
+      if (addSeg(`${fg_bg(_blue, prev)}${arrow}${fg(_base)}${text}`, `${arrow}${text}`)) {
+        prev = _blue;
+      }
     }
 
-    // Segment 6: cost + token breakdown (optional, only once cost > 0)
+    // Segment 6: cost + token breakdown (optional, only once cost > 0) —
+    // dropped entirely if there's no room.
     if (cost > 0) {
       const costFmt = `$${cost.toFixed(3)}`;
       const tokFmt  = (tokensIn > 0 || tokensOut > 0)
         ? ` \u2191${fmtTokens(tokensIn)} \u2193${fmtTokens(tokensOut)}`
         : "";
-      out += `${fg_bg(_yellow, prev)}${arrow}`;
-      out += `${fg(_base)} ${costFmt}${tokFmt} `;
-      prev = _yellow;
+      const text = ` ${costFmt}${tokFmt} `;
+      if (addSeg(`${fg_bg(_yellow, prev)}${arrow}${fg(_base)}${text}`, `${arrow}${text}`)) {
+        prev = _yellow;
+      }
     }
 
-    // Closing chevron back to terminal background
+    // Closing chevron back to terminal background — always safe, 1 column.
     out += `${fg(prev)}${arrow}${reset}`;
 
     return out;
