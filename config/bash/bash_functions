@@ -54,7 +54,7 @@ _imgcat_drain() {
 [[ "$PROMPT_COMMAND" == *_imgcat_drain* ]] || PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND; }_imgcat_drain"
 
 # Install Claude Code skills from a GitHub Enterprise blob URL.
-# Usage: aitc skill add https://github.netflix.net/owner/repo/blob/branch/path/SKILL.md
+# Usage: aitc skill add https://github.example.com/owner/repo/blob/branch/path/SKILL.md
 aitc() {
   if [[ "$1 $2" != "skill add" ]]; then
     echo "usage: aitc skill add <github-blob-url>" >&2; return 1
