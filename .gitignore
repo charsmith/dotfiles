@@ -11,6 +11,9 @@ config/pi/models.json
 # Netflix-specific tooling — not for personal dotfiles
 config/pi/modelgateway-proxy/
 config/pi/patch-session-costs.py
+# Charters live in pi_agents repo, not dotfiles (symlink → pi_agents)
+config/pi/charters
+config/pi/charters.bak.*
 # Skills are managed in their own repos (symlinks) or locally — not tracked here
 config/pi/skills/
 # Sound files — binary assets, not committed
