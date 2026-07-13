@@ -18,3 +18,4 @@ config/pi/charters.bak.*
 config/pi/skills/
 # Sound files — binary assets, not committed
 config/pi/sounds/
+config/pi/archive/
