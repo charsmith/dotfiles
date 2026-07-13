@@ -36,5 +36,22 @@ config.freetype_render_target = "HorizontalLcd"
 -- want plain characters; remove these lines to re-enable ligatures.
 config.harfbuzz_features = { "calt=0", "clig=0", "liga=0" }
 
+-- Key bindings
+local act = wezterm.action
+-- Cmd+Left/Right: jump to the prev/next tmux window with a running pi agent.
+-- These send CSI modifier-9 (Super/Cmd) arrow sequences that tmux binds to
+-- the jump-active-agent.sh script via bind-key -n in tmux.conf.
+config.keys = {
+  -- Jump to prev/next tmux window with a running pi agent (green pill).
+  -- Sends Shift+Alt+Ctrl+Arrow (modifier 8, \e[1;8D/C) which tmux binds as
+  -- C-M-S-Left / C-M-S-Right — a valid named key combo nothing else uses.
+  { key = 'LeftArrow',  mods = 'CMD', action = act.SendString('\x1b[1;8D') },
+  { key = 'RightArrow', mods = 'CMD', action = act.SendString('\x1b[1;8C') },
+  -- Cmd+O: show active team's input in nvim popup, handled by pi team-viewer extension.
+  -- Sends ESC+'o' (\x1bo) which pi sees as alt+o and routes to the registered shortcut.
+  { key = 'o', mods = 'CMD', action = act.SendString('\x1bo') },
+
+}
+
 -- Finally, return the configuration to wezterm:
 return config
