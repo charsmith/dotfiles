@@ -8,6 +8,9 @@ config/tmux/plugins
 config/bash/locals/*.local.sh
 # Pi models config contains machine-specific proxy URLs
 config/pi/models.json
+# Netflix-specific tooling — not for personal dotfiles
+config/pi/modelgateway-proxy/
+config/pi/patch-session-costs.py
 # Skills are managed in their own repos (symlinks) or locally — not tracked here
 config/pi/skills/
 # Sound files — binary assets, not committed
