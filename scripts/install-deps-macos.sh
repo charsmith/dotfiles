@@ -50,6 +50,15 @@ else
   echo "tree-sitter already installed, skipping."
 fi
 
+# dcg (Destructive Command Guard): binary-only install, no agent hook configuration
+if ! command -v dcg &>/dev/null; then
+  echo "Installing dcg (Destructive Command Guard)..."
+  curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/destructive_command_guard/main/install.sh" \
+    | bash -s -- --no-configure --quiet
+else
+  echo "dcg already installed, skipping."
+fi
+
 # nvm is intentionally installed via its official script (Homebrew nvm is discouraged)
 if [[ ! -d "$HOME/.nvm" ]]; then
   echo "Installing nvm..."
