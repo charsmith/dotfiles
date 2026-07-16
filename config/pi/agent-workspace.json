@@ -1,4 +1,7 @@
 {
   "workspace": "~/code/hacking/pi_agents",
-  "autoCommit": true
+  "autoCommit": true,
+  "coordinatorRules": [
+    "Code citations must include: absolute file path, line number, AND full github.netflix.net URL with /blob/<SHA>/<file>#L<line>."
+  ]
 }
